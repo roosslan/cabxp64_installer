@@ -1,0 +1,86 @@
+; Шаблон проекта для net8project — повторяет установку из wix_installer
+; (WixSharp/MSI). Источник файлов ..\Build — как relativ_files_from_dir в consts.h;
+; пути необходимо поправить под реальное расположение сборки.
+;
+; Версия задаётся при сборке на CI:
+;   xpsbuild.exe --build net8project.xsp --version 9.5.%BUILD_NUMBER%.26
+;
+; ProductCode совпадает с UpgradeCode из MSI, а не с его ProductCode: запись
+; в «Программах и компонентах» не пересекается с установленным MSI.
+
+[Version]
+Signature = "$XPSetup$"
+SifVersion = 1
+
+[Product]
+Name = net8project
+Version = 9.5.0.26
+Publisher = roosslan
+ProductCode = {CABBA1A3-DEAD-BABE-B00B-E5CA1ADE10AD}
+InstallDir = %APPDATA%\roosslan\net8project
+AllowChangeDir = 0
+Scope = user
+; текст лицензии — обычный текст (UTF-8 или ANSI), RTF не поддерживается
+License = license.txt
+
+[Directories]
+1 = %INSTALLDIR%
+2 = %APPDATA%\Autodesk\Revit\Addins\2026
+3 = %APPDATA%\net8project
+
+[Components]
+program
+addins
+config
+
+[Component.program]
+Description = "Файлы программы"
+Cabinet = program.cab
+Directory = 1
+Source = ..\Build
+Include = *.*
+; отладочные файлы не включаются, содержимое Files раскладывается отдельно
+Exclude = *.pdb;*.ilk;*.log;Files
+Recurse = 1
+
+[Component.addins]
+Description = "Модули Revit"
+Cabinet = addins.cab
+Directory = 2
+Source = ..\Build\Files
+Include = bi_loader.addin;ext_plugin.addin
+Recurse = 0
+
+[Component.config]
+Description = Настройки
+Cabinet = config.cab
+Directory = 3
+Source = ..\Build\Files
+Include = app.config;ifcxeprt.inf
+Recurse = 0
+
+[Shortcuts]
+
+[Registry]
+; автозагрузка; при удалении значения удаляются
+HKCU, Software\Microsoft\Windows\CurrentVersion\Run, ifc_exporter, REG_SZ, """%INSTALLDIR%\bgHelper.exe"""
+HKCU, Software\Microsoft\Windows\CurrentVersion\Run, db_checker, REG_SZ, """%INSTALLDIR%\dbchecker.exe"""
+
+[KillProcesses]
+bgHelper.exe
+worksets_ctrl.exe
+dbchecker.exe
+PluginVersionUpdater.exe
+rfaWindow.exe
+warnWindow.exe
+ifc_exporter.exe
+
+[RunAfterInstall]
+%INSTALLDIR%\bgHelper.exe
+%INSTALLDIR%\dbchecker.exe
+
+[Build]
+Output = dist
+SingleFile = net8project_setup.exe
+Mode = both
+Compression = MSZIP

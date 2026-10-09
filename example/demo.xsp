@@ -1,0 +1,59 @@
+; Демонстрационный проект XPSetup.
+; Сборка: xpsbuild.exe --build demo.xsp
+
+[Version]
+Signature = "$XPSetup$"
+SifVersion = 1
+
+[Product]
+Name = "Демо-программа"
+Version = 1.0.0.1
+Publisher = roosslan
+ProductCode = {6F1A2C3D-4B5E-4F60-8172-93A4B5C6D7E8}
+InstallDir = "%LOCALAPPDATA%\Programs\XPSetup Demo"
+AllowChangeDir = 1
+Scope = user
+License = license.txt
+
+[Directories]
+1 = %INSTALLDIR%
+2 = "%INSTALLDIR%\Документация"
+
+[Components]
+program
+docs
+
+[Component.program]
+Description = "Файлы программы"
+Cabinet = program.cab
+Directory = 1
+Source = files
+Include = *.*
+Exclude = *.pdb;docs
+Recurse = 1
+
+[Component.docs]
+Description = Документация
+Cabinet = docs.cab
+Directory = 2
+Source = files\docs
+Include = *.txt
+Recurse = 0
+
+[Shortcuts]
+; расположение, имя, объект, параметры, рабочая директория
+Programs, "XPSetup Demo\Прочти меня", "%INSTALLDIR%\readme.txt"
+
+[Registry]
+; корень, раздел, параметр, тип, значение
+HKCU, "Software\roosslan\XPSetup Demo", InstallPath, REG_SZ, %INSTALLDIR%
+HKCU, "Software\roosslan\XPSetup Demo", Build, REG_DWORD, 1
+
+[KillProcesses]
+
+[RunAfterInstall]
+
+[Build]
+Output = dist
+Mode = both
+Compression = MSZIP

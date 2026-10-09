@@ -1,0 +1,36 @@
+#include <winver.h>
+#include "../common/version.h"
+
+#pragma code_page(65001)
+
+1 ICON "setup.ico"
+1 24 "setup.manifest"
+
+VS_VERSION_INFO VERSIONINFO
+ FILEVERSION XPSETUP_VERSION_MAJOR, XPSETUP_VERSION_MINOR, 0, 0
+ PRODUCTVERSION XPSETUP_VERSION_MAJOR, XPSETUP_VERSION_MINOR, 0, 0
+ FILEFLAGSMASK 0x3fL
+ FILEFLAGS 0x0L
+ FILEOS VOS_NT_WINDOWS32
+ FILETYPE VFT_APP
+ FILESUBTYPE 0x0L
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "041904b0"
+        BEGIN
+            VALUE "CompanyName", "roosslan"
+            VALUE "FileDescription", "Программа установки"
+            VALUE "FileVersion", XPSETUP_VERSION
+            VALUE "InternalName", "setup"
+            VALUE "LegalCopyright", XPSETUP_COPYRIGHT
+            VALUE "OriginalFilename", "setup.exe"
+            VALUE "ProductName", "XPSetup"
+            VALUE "ProductVersion", XPSETUP_VERSION
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x419, 1200
+    END
+END
