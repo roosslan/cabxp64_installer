@@ -14,6 +14,7 @@
 
 #include "../common/cabfile.h"
 #include "../common/fsutil.h"
+#include "../common/log.h"
 #include "../common/project.h"
 #include "install.h"
 #include "screen.h"
@@ -25,6 +26,8 @@ const char *const kSifName = "setup.sif";
 const char *const kConhostFlag = "/conhost";
 const char *const kUninstallFlag = "/uninstall";
 const char *const kUninstallRunFlag = "/uninstall-run";
+const char *const kLogFlag = "/log";
+const char *const kDefaultLog = "%TEMP%\\XPSetup.log";
 
 bool hasArg(const std::vector<std::string> &args, const char *flag)
 {
@@ -156,8 +159,12 @@ int runUninstall(const std::string &dir, const std::vector<std::string> &args)
         }
         return 1;
     }
+    xlog::write("Журнал установки: " + logPath + " (" + log.name + " " + log.version + ")");
     if (log.perMachine && !isElevated())
+    {
+        xlog::write("Перезапуск с правами администратора");
         return relaunchElevated(args) ? 0 : 1;
+    }
 
     std::string title = "Удаление " + log.name;
     if (!scr::init(title))
@@ -185,7 +192,10 @@ int runUninstall(const std::string &dir, const std::vector<std::string> &args)
                    "ВВОД=Завершить");
     }
     else
+    {
+        xlog::write("Удаление отменено пользователем");
         code = 2;
+    }
     scr::restore();
     return code;
 }
@@ -211,6 +221,9 @@ int uninstallMode(const std::vector<std::string> &args)
     std::vector<std::string> a = {kUninstallFlag, kUninstallRunFlag, dir};
     if (hasArg(args, kConhostFlag))
         a.push_back(kConhostFlag);
+    if (!argAfter(args, kLogFlag).empty())
+        a.insert(a.end(), {kLogFlag, argAfter(args, kLogFlag)});
+    xlog::write("Запуск временной копии программы удаления: " + copy);
     return startProcess(copy, joinArgs(a), 0) ? 0 : runUninstall(dir, args);
 }
 
@@ -249,7 +262,10 @@ int installMode(const std::vector<std::string> &args)
         }
         distDir = tempDir;
         stubSize = selfInfo.offset;
+        xlog::write("Данные внутри программы установки распакованы в " + tempDir);
     }
+    else
+        xlog::write("Дистрибутив в директории " + distDir);
     auto cleanup = [&]() {
         scr::restore();
         if (!tempDir.empty())
@@ -271,8 +287,11 @@ int installMode(const std::vector<std::string> &args)
         cleanup();
         return 1;
     }
+    xlog::write("Продукт: " + p.name + " " + p.version + " " + p.productCode +
+                (p.perMachine ? ", для всех пользователей" : ", для текущего пользователя"));
     if (p.perMachine && !isElevated())
     {
+        xlog::write("Перезапуск с правами администратора");
         cleanup();
         return relaunchElevated(args) ? 0 : 1;
     }
@@ -308,6 +327,8 @@ int installMode(const std::vector<std::string> &args)
     job.existing = findExisting(p);
     job.installDir = job.existing.found ? job.existing.dir : expandVars(p.installDir, std::string(), p.perMachine);
     uint64_t need = payloadSize(p, distDir);
+    if (job.existing.found)
+        xlog::write("Найдена установленная версия " + job.existing.version + " в " + job.existing.dir);
 
     bool go = ui::welcome(p.name) &&
               (licenseText.empty() || ui::license(p.name, licenseText)) &&
@@ -315,9 +336,11 @@ int installMode(const std::vector<std::string> &args)
                                   : ui::chooseDirectory(p, job.installDir, need));
     if (!go)
     {
+        xlog::write("Установка отменена пользователем");
         cleanup();
         return 2;
     }
+    xlog::write("Директория установки: " + job.installDir);
 
     scr::lockClose(true);
     {
@@ -348,6 +371,9 @@ int installMode(const std::vector<std::string> &args)
         }
     }
     scr::lockClose(false);
+    xlog::write("Установка завершена: файлов " + std::to_string(job.log.files.size()));
+    // Копия журнала этого сеанса остаётся рядом с программой (удаляется вместе с ней).
+    xlog::saveSession(fsu::joinPath(job.installDir, kSetupLogName));
 
     std::string text = "   Установка " + p.name + " успешно завершена.\n";
     if (!p.runAfter.empty())
@@ -371,7 +397,14 @@ int main()
     if (relaunchInConhost(args))
         return 0;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
-    int code = hasArg(args, kUninstallFlag) ? uninstallMode(args) : installMode(args);
+    bool removing = hasArg(args, kUninstallFlag);
+    std::string logPath = argAfter(args, kLogFlag);
+    if (logPath.empty())
+        logPath = expandVars(kDefaultLog, std::string(), false);
+    xlog::open(logPath, removing ? "Удаление программы" : "Установка программы");
+    int code = removing ? uninstallMode(args) : installMode(args);
+    xlog::write("Код завершения: " + std::to_string(code));
+    xlog::close();
     CoUninitialize();
     return code;
 }

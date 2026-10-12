@@ -49,7 +49,7 @@ void setFont()
     if (GetOEMCP() == 866)
     {
         f.dwFontSize.X = 8;
-        f.dwFontSize.Y = 16;
+        f.dwFontSize.Y = 12;
         f.FontFamily = FF_MODERN | FIXED_PITCH;
         lstrcpynW(f.FaceName, L"Terminal", LF_FACESIZE);
         if (SetCurrentConsoleFontEx(hOut, FALSE, &f))
@@ -333,6 +333,13 @@ void present()
         SetConsoleCursorPosition(hOut, c);
     }
     SetConsoleCursorInfo(hOut, &ci);
+}
+
+void cell(int x, int y, wchar_t &ch, uint16_t &attr)
+{
+    const CHAR_INFO &c = g_buf[y * W + x];
+    ch = c.Char.UnicodeChar;
+    attr = c.Attributes;
 }
 
 bool waitKey(Key &k, unsigned timeoutMs)

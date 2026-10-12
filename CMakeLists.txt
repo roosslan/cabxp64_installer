@@ -13,6 +13,7 @@ set(COMMON_SOURCES
     src/common/cabfile.cpp
     src/common/format.cpp
     src/common/fsutil.cpp
+    src/common/log.cpp
     src/common/project.cpp
     src/common/sif.cpp
 )

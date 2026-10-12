@@ -25,6 +25,8 @@ struct InstallLog
 
 const char *const kLogName = "uninstall.sif";
 const char *const kUninstallerName = "uninst.exe";
+// Копия журнала программы установки в директории установки.
+const char *const kSetupLogName = "setup.log";
 
 // Установленная ранее версия продукта (по разделу Uninstall реестра).
 struct ExistingInstall
