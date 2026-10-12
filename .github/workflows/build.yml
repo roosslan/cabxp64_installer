@@ -21,6 +21,9 @@ jobs:
       - name: Сборка
         run: cmake --build build --config Release --parallel
 
+      - name: Модульные тесты
+        run: ctest --test-dir build -C Release --output-on-failure
+
       - name: Проверка интерфейса и установки
         shell: powershell
         run: powershell -ExecutionPolicy Bypass -File tests\ci.ps1
@@ -34,6 +37,7 @@ jobs:
             build/Release/xpsbuild.exe
             build/Release/setup.exe
             build/Release/tuitest.exe
+            build/Release/unittests.exe
             dist-ci/
 
       - name: Журналы
