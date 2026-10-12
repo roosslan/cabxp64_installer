@@ -1,0 +1,11 @@
+# Повторный запуск той же версии: экран переустановки.
+run "%XPS_DIST%\setup\setup.exe" /log "%XPS_LOG%"
+expect "Вас приветствует программа установки." 20000
+key ENTER
+expect "F8=Принимаю"
+key F8
+expect "переустановить"
+key ENTER
+expect "успешно завершена" 60000
+key ENTER
+exitcode 0

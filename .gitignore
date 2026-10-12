@@ -1,3 +1,5 @@
 build/
 build-*/
 example/dist/
+dist-ci/
+ci-logs/

@@ -1,0 +1,45 @@
+name: Сборка и проверка
+
+on:
+  push:
+    branches: [trunk]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Конфигурирование
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+
+      - name: Сборка
+        run: cmake --build build --config Release --parallel
+
+      - name: Проверка интерфейса и установки
+        shell: powershell
+        run: powershell -ExecutionPolicy Bypass -File tests\ci.ps1
+
+      - name: Программы и демонстрационный дистрибутив
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xpsetup
+          path: |
+            build/Release/xpsbuild.exe
+            build/Release/setup.exe
+            build/Release/tuitest.exe
+            dist-ci/
+
+      - name: Журналы
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: ci-logs/
+          if-no-files-found: ignore
