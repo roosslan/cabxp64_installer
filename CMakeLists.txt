@@ -115,3 +115,27 @@ target_compile_definitions(tuitest PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SEC
 if (MSVC)
     target_compile_options(tuitest PRIVATE /W3 /utf-8)
 endif()
+
+# ---------------------------------------------------------------------------
+# Модульные и интеграционные тесты (ctest -C Release).
+# ---------------------------------------------------------------------------
+enable_testing()
+add_executable(unittests
+    tests/unit/main.cpp
+    tests/unit/test_build.cpp
+    tests/unit/test_cab.cpp
+    tests/unit/test_install.cpp
+    tests/unit/test_log.cpp
+    tests/unit/test_project.cpp
+    tests/unit/test_sif.cpp
+    src/builder/build.cpp
+    src/setup/install.cpp
+    ${COMMON_SOURCES}
+)
+target_compile_features(unittests PRIVATE cxx_std_17)
+target_compile_definitions(unittests PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX _CRT_SECURE_NO_WARNINGS)
+target_link_libraries(unittests PRIVATE cabinet shell32 ole32 user32 advapi32)
+if (MSVC)
+    target_compile_options(unittests PRIVATE /W3 /utf-8)
+endif()
+add_test(NAME unittests COMMAND unittests)
