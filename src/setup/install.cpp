@@ -12,6 +12,7 @@
 
 #include "../common/cabfile.h"
 #include "../common/fsutil.h"
+#include "../common/log.h"
 #include "../common/sif.h"
 
 namespace {
@@ -84,6 +85,7 @@ public:
         missingDirs(fsu::dirName(target), job.log.dirs);
         if (std::find(job.log.files.begin(), job.log.files.end(), target) == job.log.files.end())
             job.log.files.push_back(target);
+        xlog::write("  " + target);
         if (ui)
             ui->onStatus("Копирование: " + fsu::baseName(name));
         return true;
@@ -106,6 +108,7 @@ private:
 // Удаление установленного при неудачной установке.
 void rollback(InstallJob &job)
 {
+    xlog::write("Откат: удаление скопированных файлов (" + std::to_string(job.log.files.size()) + ")");
     for (const std::string &f : job.log.files)
     {
         fsu::clearReadOnly(f);
@@ -319,12 +322,19 @@ void killProcesses(const std::vector<std::string> &names, InstallProgress *progr
             if (!ProcessIdToSessionId(pe.th32ProcessID, &session) || session != mySession)
                 continue;
             HANDLE h = OpenProcess(PROCESS_TERMINATE | SYNCHRONIZE, FALSE, pe.th32ProcessID);
-            if (h)
+            std::string what = name + " (PID " + std::to_string(pe.th32ProcessID) + ")";
+            if (!h)
             {
-                if (TerminateProcess(h, 1))
-                    WaitForSingleObject(h, 5000);
-                CloseHandle(h);
+                xlog::lastError("Не удалось открыть процесс " + what);
+                continue;
             }
+            if (!TerminateProcess(h, 1))
+                xlog::lastError("Не удалось завершить процесс " + what);
+            else if (WaitForSingleObject(h, 5000) != WAIT_OBJECT_0)
+                xlog::error("Процесс " + what + " не завершился за 5 с");
+            else
+                xlog::write("Завершён процесс " + what);
+            CloseHandle(h);
         }
         CloseHandle(snap);
     }
@@ -346,6 +356,8 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
     job.log.perMachine = p.perMachine;
     job.log.killProcesses = p.killProcesses;
 
+    xlog::write("Установка " + p.name + " " + p.version + " в " + job.installDir);
+    xlog::write("Дистрибутив: " + job.distDir);
     if (progress)
         progress->onPercent(0);
     killProcesses(p.killProcesses, progress);
@@ -356,7 +368,10 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
     {
         InstallLog old;
         std::string lerr;
-        if (old.load(fsu::joinPath(job.existing.dir, kLogName), lerr))
+        xlog::write("Удаление прежней версии " + job.existing.version + " из " + job.existing.dir);
+        if (!old.load(fsu::joinPath(job.existing.dir, kLogName), lerr))
+            xlog::error("Журнал прежней установки не прочитан: " + lerr);
+        else
         {
             killProcesses(old.killProcesses, progress);
             uninstall(old, progress, true, lerr);
@@ -371,6 +386,7 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
     {
         err = "Программа установки не может создать директорию\n" + job.installDir + "\n" +
               fsu::lastErrorText();
+        xlog::error(err);
         rollback(job);
         return false;
     }
@@ -386,9 +402,12 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
         if (!cabRead(cab, info, cerr))
         {
             err = "Программа установки не может найти файл " + c.cabinet + "\n" + cerr;
+            xlog::error(err);
             rollback(job);
             return false;
         }
+        xlog::write("Компонент " + c.id + ": " + c.cabinet + " -> " + dest + " (файлов: " +
+                    std::to_string(info.entries.size()) + ")");
         for (;;)
         {
             missingDirs(dest, job.log.dirs);
@@ -400,12 +419,15 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
                 if (cabExtract(cab, dest, {}, true, Overwrite::Always, &cp, cerr))
                     break;
             }
-            if (!progress || !progress->askRetry(cerr))
+            xlog::error("Компонент " + c.id + ": " + cerr);
+            if (progress && progress->askRetry(cerr))
             {
-                err = cerr;
-                rollback(job);
-                return false;
+                xlog::write("Повтор распаковки " + c.cabinet);
+                continue;
             }
+            err = cerr;
+            rollback(job);
+            return false;
         }
         base += info.totalSize;
     }
@@ -453,6 +475,7 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
                             &key, nullptr) != ERROR_SUCCESS)
         {
             err = "Программа установки не может создать раздел реестра\n" + r.root + "\\" + path;
+            xlog::error(err);
             return false;
         }
         std::string value = expandVars(r.value, job.installDir, p.perMachine);
@@ -466,8 +489,10 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
         {
             err = "Программа установки не может записать значение реестра\n" + r.root + "\\" + path +
                   "\\" + r.name;
+            xlog::error(err);
             return false;
         }
+        xlog::write("Реестр: " + r.root + "\\" + path + " : " + r.name + " = " + value);
         RegistryValue entry = r;
         entry.key = path;
         job.log.values.push_back(entry);
@@ -487,20 +512,29 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
                             expandVars(s.workDir, job.installDir, p.perMachine)))
         {
             err = "Программа установки не может создать ярлык\n" + lnk;
+            xlog::error(err);
             return false;
         }
+        xlog::write("Ярлык: " + lnk);
         job.log.shortcuts.push_back(lnk);
     }
 
     advance("Программа удаления");
     std::string uninst = fsu::joinPath(job.installDir, kUninstallerName);
     if (!copyStub(job.selfPath, job.selfStubSize, uninst, err))
+    {
+        xlog::error(err);
         return false;
+    }
+    xlog::write("Программа удаления: " + uninst);
 
     advance("Журнал установки");
     std::string logPath = fsu::joinPath(job.installDir, kLogName);
     if (!job.log.save(logPath, err))
+    {
+        xlog::error(err);
         return false;
+    }
 
     advance("Регистрация программы");
     HKEY root = p.perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
@@ -509,6 +543,7 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
                         KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
     {
         err = "Программа установки не может зарегистрировать программу в системе";
+        xlog::error(err);
         return false;
     }
     std::string icon = uninst + ",0";
@@ -531,6 +566,8 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
     regSetDword(key, "NoModify", 1);
     regSetDword(key, "NoRepair", 1);
     RegCloseKey(key);
+    xlog::write(std::string("Регистрация: ") + (p.perMachine ? "HKLM\\" : "HKCU\\") +
+                uninstallKeyPath(p.productCode));
 
     if (progress)
         progress->onPercent(100);
@@ -544,9 +581,13 @@ void runAfterInstall(const InstallJob &job)
     {
         std::string prog = expandVars(r.program, job.installDir, p.perMachine);
         std::string args = expandVars(r.args, job.installDir, p.perMachine);
-        ShellExecuteW(nullptr, L"open", fsu::widen(prog).c_str(),
-                      args.empty() ? nullptr : fsu::widen(args).c_str(),
-                      fsu::widen(fsu::dirName(prog)).c_str(), SW_SHOWNORMAL);
+        HINSTANCE r = ShellExecuteW(nullptr, L"open", fsu::widen(prog).c_str(),
+                                    args.empty() ? nullptr : fsu::widen(args).c_str(),
+                                    fsu::widen(fsu::dirName(prog)).c_str(), SW_SHOWNORMAL);
+        if ((INT_PTR) r > 32)
+            xlog::write("Запущено: " + prog + (args.empty() ? "" : " " + args));
+        else
+            xlog::error("Не удалось запустить " + prog + " (код " + std::to_string((INT_PTR) r) + ")");
     }
 }
 
@@ -570,6 +611,8 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
         }
     };
 
+    xlog::write("Удаление " + log.name + " " + log.version + " из " + log.installDir +
+                (keepRegistration ? " (обновление)" : ""));
     std::vector<std::string> failed;
     for (const std::string &f : log.files)
     {
@@ -577,10 +620,15 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
         if (!fsu::fileExists(f))
             continue;
         fsu::clearReadOnly(f);
-        if (!fsu::removeFile(f))
+        if (fsu::removeFile(f))
+            xlog::write("  удалён " + f);
+        else
         {
+            xlog::lastError("  не удалён " + f);
             // Занятый файл удаляется при следующей перезагрузке (если хватает прав).
-            if (!MoveFileExW(fsu::widen(f).c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT))
+            if (MoveFileExW(fsu::widen(f).c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT))
+                xlog::write("  будет удалён при перезагрузке");
+            else
                 failed.push_back(f);
         }
     }
@@ -630,6 +678,8 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
         RegDeleteKeyW(root, fsu::widen(uninstallKeyPath(log.productCode)).c_str());
         fsu::removeFile(logPath);
         fsu::removeFile(uninst);
+        fsu::removeFile(fsu::joinPath(log.installDir, kSetupLogName));
+        xlog::write("Регистрация в системе удалена");
     }
 
     advance("Удаление директорий");
@@ -644,6 +694,8 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
 
     if (progress)
         progress->onPercent(100);
+    xlog::write(failed.empty() ? std::string("Удаление завершено")
+                               : "Удаление завершено, не удалено файлов: " + std::to_string(failed.size()));
     if (!failed.empty())
     {
         err = "Не удалось удалить файлы:";

@@ -9,6 +9,7 @@
 
 #include "../common/format.h"
 #include "../common/fsutil.h"
+#include "../common/log.h"
 #include "../common/project.h"
 #include "../common/version.h"
 #include "app.h"
@@ -135,6 +136,7 @@ int batchBuild(const std::vector<std::string> &args)
 int main()
 {
     std::vector<std::string> args = fsu::commandLineArgs();
+    xlog::open(expandVars("%APPDATA%\\XPSetup\\xpsbuild.log", std::string(), false), "Сборщик");
     if (!args.empty())
     {
         const std::string &opt = args[0];

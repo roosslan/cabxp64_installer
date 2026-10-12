@@ -4,7 +4,9 @@
 
 #include <windows.h>
 
+#include "../common/format.h"
 #include "../common/fsutil.h"
+#include "../common/log.h"
 #include "../common/sif.h"
 #include "builderres.h"
 
@@ -89,6 +91,8 @@ bool buildFolder(const SetupProject &p, const std::string &projectDir, const std
         std::string cab = fsu::joinPath(dir, c.cabinet);
         if (!cabCreate(cab, files.files, p.compression, progress, err))
             return false;
+        xlog::write("  " + c.cabinet + ": " + pluralFiles(files.files.size()) + ", " + formatSize(files.bytes) +
+                    " -> " + formatSize(fsu::fileSize(cab)));
         layout.push_back(cab);
         result.files += files.files.size();
         result.bytes += files.bytes;
@@ -177,8 +181,25 @@ bool collectComponent(const Component &c, const std::string &projectDir, Compone
     return true;
 }
 
+static bool buildImpl(const SetupProject &p, const std::string &projectPath, const std::string &stub,
+                      CabProgress *progress, BuildResult &result, std::string &err);
+
 bool buildDistribution(const SetupProject &p, const std::string &projectPath, const std::string &stub,
                        CabProgress *progress, BuildResult &result, std::string &err)
+{
+    xlog::write("Сборка " + fsu::fullPath(projectPath) + ": " + p.name + " " + p.version + " -> " +
+                outputDirectory(p, projectPath));
+    bool ok = buildImpl(p, projectPath, stub, progress, result, err);
+    if (!ok)
+        xlog::error(err.empty() || err == kCabCancelled ? std::string("сборка прервана") : err);
+    else
+        for (const std::string &o : result.outputs)
+            xlog::write("Готово: " + o + " (" + formatSize(fsu::fileSize(o)) + ")");
+    return ok;
+}
+
+static bool buildImpl(const SetupProject &p, const std::string &projectPath, const std::string &stub,
+                      CabProgress *progress, BuildResult &result, std::string &err)
 {
     result = BuildResult();
     std::string problem = validateProject(p);

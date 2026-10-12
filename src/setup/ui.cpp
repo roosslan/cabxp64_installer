@@ -7,6 +7,7 @@
 
 #include "../common/fsutil.h"
 #include "../common/format.h"
+#include "../common/log.h"
 #include "screen.h"
 
 namespace ui {
@@ -419,7 +420,7 @@ void ProgressScreen::draw()
         scr::center(5 + (int) i, scr::Text, lines[i]);
 
     const int bx1 = 7, bx2 = 72, by1 = 11, by2 = 17;
-    scr::box(bx1, by1, bx2, by2, scr::Text);
+    scr::box(bx1, by1, bx2, by2, scr::Text, true);
     scr::put(bx1 + 2, by1 + 1, scr::Text, label);
     scr::center(by1 + 2, scr::Text, std::to_string(percent) + "%");
     drawBar(13, 66, by1 + 4, percent, scr::Yellow);
@@ -486,7 +487,7 @@ void finish(const std::string &title, const std::string &text, const std::string
         scr::clear();
         scr::header(title);
         scr::para(0, 4, scr::W - 2, scr::Text, text);
-        scr::box(bx1, by1, bx2, by2, scr::Text);
+        scr::box(bx1, by1, bx2, by2, scr::Text, true);
         scr::put(bx1 + 2, by1 + 1, scr::Text, subst(countdown, "time", seconds(left)));
         drawBar(13, 66, by1 + 3, (int) (elapsed * 100 / (total * 1000)), scr::Red);
         scr::status(key);
@@ -500,9 +501,12 @@ void finish(const std::string &title, const std::string &text, const std::string
 
 void error(const std::string &title, const std::string &text)
 {
+    xlog::error(text);
     std::string body;
     for (const std::string &l : wrapLines(text, scr::W - 8))
         body += "   " + l + "\n";
+    if (!xlog::path().empty())
+        body += "\n   Подробности записаны в журнал:\n      " + xlog::path() + "\n";
     body += "\n      \xE2\x80\xA2  Чтобы выйти из программы, нажмите <F3>.";
     scr::flushKeys();
     for (;;)

@@ -42,6 +42,8 @@ int para(int x, int y, int width, uint16_t attr, const std::string &text);
 int textWidth(const std::string &text);         // число символов UTF-8
 void showCursor(int x, int y);                  // x < 0 — скрыть
 void present();
+// Ячейка буфера: символ и атрибут (для предпросмотра и проверок).
+void cell(int x, int y, wchar_t &ch, uint16_t &attr);
 
 // Клавиатура: виртуальный код клавиши и введённый символ.
 struct Key
