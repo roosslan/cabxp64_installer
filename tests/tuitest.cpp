@@ -4,7 +4,8 @@
 //
 // Программа запускается в псевдоконсоли 80x25; её вывод (VT-последовательности)
 // разбирается в модель экрана, клавиши отправляются VT-последовательностями.
-// Команды сценария (файл UTF-8, по одной в строке, '#' — комментарий):
+// Команды сценария (файл UTF-8, по одной в строке, '#' — комментарий;
+// переменные окружения вида %TEMP% подставляются):
 //
 //   run <командная строка>         запуск программы
 //   expect <текст> [мс]            ждать появления текста на экране (по умолчанию 10 с)
@@ -334,6 +335,19 @@ std::string keySequence(const std::string &name)
     return name;
 }
 
+// Подстановка переменных окружения (%TEMP%, %XPS_DIST% и т. п.).
+std::string expandEnv(const std::string &s)
+{
+    std::wstring w = widen(s);
+    DWORD n = ExpandEnvironmentStringsW(w.c_str(), nullptr, 0);
+    if (n == 0)
+        return s;
+    std::wstring out(n, L'\0');
+    ExpandEnvironmentStringsW(w.c_str(), &out[0], n);
+    out.resize(n - 1);
+    return narrow(out);
+}
+
 std::string trim(const std::string &s)
 {
     size_t a = s.find_first_not_of(" \t\r\n");
@@ -431,6 +445,7 @@ int main(int argc, char **argv)
         ++lineNo;
         if (line.empty() || line[0] == '#')
             continue;
+        line = expandEnv(line);
         std::string rest = line;
         std::string cmd = takeArg(rest);
         print("> " + line + "\n");

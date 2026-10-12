@@ -1,0 +1,14 @@
+# Установка из однофайлового дистрибутива в %XPS_TARGET%.
+run "%XPS_DIST%\%XPS_SINGLE%" /log "%XPS_LOG%"
+expect "загружает файлы" 10000
+expect "Вас приветствует программа установки." 30000
+key ENTER
+expect "F8=Принимаю"
+key F8
+expect "в следующую директорию"
+key BS 120
+text %XPS_TARGET%
+key ENTER
+expect "успешно завершена" 60000
+key ENTER
+exitcode 0

@@ -1,0 +1,19 @@
+# Сборщик: главное окно, диалоги продукта и компонентов, выход.
+run "%XPS_BIN%\xpsbuild.exe" "%XPS_PROJECT%"
+expect "demo.xsp" 15000
+expect "Компоненты"
+key F4
+expect "Код продукта"
+expect "Для всех пользователей"
+key ESC
+sleep 300
+key F5
+expect "Идентификатор"
+key ENTER
+expect "Включать поддиректории"
+key ESC
+sleep 300
+key ESC
+sleep 300
+key ALT-X
+exitcode 0 10000

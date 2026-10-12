@@ -1,0 +1,7 @@
+# Удаление через uninst.exe, как из «Программ и компонентов».
+run "%XPS_TARGET%\uninst.exe" /uninstall /log "%XPS_LOG%"
+expect "подготовлена к удалению" 15000
+key L
+expect "удалена с этого компьютера" 30000
+key ENTER
+sleep 5000

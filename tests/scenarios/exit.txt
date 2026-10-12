@@ -1,0 +1,14 @@
+# Приветствие, лицензия, выход по F3 с подтверждением.
+run "%XPS_DIST%\setup\setup.exe" /log "%XPS_LOG%"
+expect "Вас приветствует программа установки." 20000
+key ENTER
+expect "F8=Принимаю"
+key PGDN
+key F3
+expect "не установлена на этом компьютере"
+key ENTER
+expect "F8=Принимаю"
+key ESC
+expect "не установлена"
+key F3
+exitcode 2
