@@ -1,0 +1,45 @@
+; Проект для проверки action в CI: источник файлов задаётся переменной
+; окружения XPS_PAYLOAD (параметр defines action).
+
+[Version]
+Signature = "$XPSetup$"
+SifVersion = 1
+
+[Product]
+Name = Action Test
+Version = 0.0.0.1
+Publisher = roosslan
+ProductCode = {2B7C4E61-9A0D-4F3B-8C55-6E1D2A3F4B70}
+InstallDir = "%LOCALAPPDATA%\Programs\XPSetup Action Test"
+AllowChangeDir = 1
+Scope = user
+License = ..\..\example\license.txt
+
+[Directories]
+1 = %INSTALLDIR%
+
+[Components]
+program
+
+[Component.program]
+Description = "Файлы программы"
+Cabinet = program.cab
+Directory = 1
+Source = %XPS_PAYLOAD%
+Include = *.*
+Exclude = *.pdb
+Recurse = 1
+
+[Shortcuts]
+
+[Registry]
+
+[KillProcesses]
+
+[RunAfterInstall]
+
+[Build]
+Output = dist
+SingleFile = action-test_setup.exe
+Mode = both
+Compression = MSZIP

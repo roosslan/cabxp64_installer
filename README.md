@@ -103,18 +103,108 @@ ctest --test-dir build -C Release --output-on-failure
 |---|---|
 | `--mode folder\|single\|both` | Вид дистрибутива (по умолчанию из проекта) |
 | `--out <директория>` | Директория результата |
-| `--version <версия>` | Версия продукта, например номер сборки CI |
+| `--version <версия>` | Версия продукта: от одного до четырёх чисел через точку; допускается тег вида `v1.2.3` |
+| `--define <имя>=<значение>` | Переменная окружения для путей проекта; можно повторять |
 | `--stub <setup.exe>` | Другая программа установки вместо встроенной |
+
+В путях проекта (`Source`, `License`, `Output`) при сборке подставляются
+переменные окружения: `Source = %APP_BUILD%\bin`. Незаданная переменная —
+ошибка сборки.
 
 Пример для CI:
 
 ```bash
-xpsbuild.exe --build net8project.xsp --version 9.5.123.26 --mode both
+xpsbuild.exe --build net8project.xsp --version 9.5.123.26 --mode both --define APP_BUILD=D:\build\Release
 ```
+
+Коды завершения: 0 — дистрибутив собран, 1 — ошибка сборки, 2 — неверные параметры.
 
 Клавиши редактора: F2 — сохранить, F3 — открыть, F4 — продукт, F5 — компоненты,
 F6 — файлы дистрибутива, F9 — собрать, Ctrl+F9 — запустить установку, Alt+X — выход.
 В списках: Ins — добавить, Enter — изменить, Del — удалить.
+
+## GitHub Actions
+
+Репозиторий является action: установщик для релиза другого репозитория собирается
+одним шагом. Action работает на Windows-раннерах, скачивает `xpsbuild.exe` из
+релиза XPSetup, собирает дистрибутив по проекту `.xsp` и при необходимости
+прикладывает установщик к релизу.
+
+Пример: установщик собирается при публикации релиза и прикладывается к нему.
+
+```yaml
+name: Установщик
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Сборка программы, результат — в build\Release
+      - run: dotnet publish -c Release -o build\Release
+
+      - uses: roosslan/cabxp64_installer@v1
+        with:
+          project: installer/app.xsp
+          version: ${{ github.event.release.tag_name }}
+          mode: both
+          defines: |
+            APP_BUILD=${{ github.workspace }}\build\Release
+          release: ${{ github.event.release.tag_name }}
+```
+
+Проект `installer/app.xsp` хранится в репозитории программы и создаётся в
+редакторе `xpsbuild.exe`; путь к собранным файлам в нём задаётся переменной:
+`Source = %APP_BUILD%`.
+
+Входы:
+
+| Вход | Назначение |
+|---|---|
+| `project` | Путь к проекту `.xsp` (обязательный) |
+| `version` | Версия продукта или тег (`v1.2.3`); по умолчанию — из проекта |
+| `mode` | `folder`, `single` или `both`; по умолчанию — из проекта |
+| `out` | Директория результата, по умолчанию `xpsetup-dist` |
+| `defines` | Переменные для путей проекта, по одной в строке: `ИМЯ=значение` (строки с `#` пропускаются) |
+| `release` | Тег релиза текущего репозитория, к которому приложить установщик |
+| `token` | Токен для загрузки в релиз, по умолчанию `github.token` (нужно `permissions: contents: write`) |
+| `xpsetup-version` | Релиз XPSetup, из которого взять `xpsbuild.exe` |
+| `xpsbuild` | Путь к готовому `xpsbuild.exe` (без загрузки) |
+
+Выходы: `single` — однофайловый установщик, `setup` и `dir` — дистрибутив-директория,
+`zip` — её ZIP-архив (`setup.exe`, `setup.sif`, `license.txt`, `*.cab`), `version` —
+версия продукта. В релиз прикладываются однофайловый установщик и ZIP-архив.
+
+Выбор `xpsbuild.exe`: при подключении по полному тегу (`@v1.2.3`) берётся этот
+релиз, по основному (`@v1`) — последний релиз `v1.x`, иначе — последний релиз.
+Если релизов нет, `xpsbuild.exe` собирается из исходников той же версии action
+(несколько минут).
+
+Ошибки сборки выводятся аннотациями GitHub. Без action сборщик можно вызывать
+напрямую: при запуске в GitHub Actions он сам записывает пути к результатам в
+`GITHUB_OUTPUT` (`setup`, `dir`, `single`, `name`, `version`).
+
+## Выпуск релиза XPSetup
+
+Релиз выпускается тегом, совпадающим с версией в `src/common/version.h`
+(`XPSETUP_VERSION`): для версии `1.0` — `v1.0` или `v1.0.N`. Workflow
+`release.yml` собирает и проверяет проект, публикует релиз с `xpsbuild.exe`,
+`setup.exe` и `SHA256SUMS.txt` и переносит основной тег (`v1`) на новый релиз.
+
+```bash
+git tag v1.0.0
+```
+
+```bash
+git push origin v1.0.0
+```
 
 ## Дистрибутив
 
@@ -237,5 +327,7 @@ Cabine вместе с описанными там обходами ошибок
 | `src/builder/build.*` | Сборка дистрибутива: сбор файлов, CAB, `setup.sif`, один файл |
 | `src/builder/textview.*` | Прокручиваемый текст |
 | `src/tv/*` | Из Cabine: диалоги, горячие клавиши, строки Turbo Vision |
+| `action.yml` | Action для сборки установщика в GitHub Actions |
+| `.github/workflows/*` | Сборка и проверка, выпуск релиза |
 | `tests/unit/*` | Модульные и интеграционные тесты |
 | `tests/tuitest.cpp`, `tests/scenarios/*`, `tests/ci.ps1` | Проверка интерфейса через псевдоконсоль и проверка в CI |

@@ -1,0 +1,184 @@
+name: XPSetup
+description: Сборка установщика в стиле Windows XP (CAB-архивы) по проекту .xsp и публикация в релиз
+author: roosslan
+branding:
+  icon: package
+  color: blue
+
+inputs:
+  project:
+    description: Путь к проекту установки (.xsp) относительно рабочей директории
+    required: true
+  version:
+    description: Версия продукта (например 1.2.3 или тег v1.2.3); по умолчанию — из проекта
+    required: false
+    default: ''
+  mode:
+    description: Вид дистрибутива — folder, single или both; по умолчанию — из проекта
+    required: false
+    default: ''
+  out:
+    description: Директория результата
+    required: false
+    default: xpsetup-dist
+  defines:
+    description: Переменные окружения для путей проекта, по одной в строке — ИМЯ=значение
+    required: false
+    default: ''
+  release:
+    description: Тег релиза текущего репозитория, к которому приложить установщик (пусто — не прикладывать)
+    required: false
+    default: ''
+  token:
+    description: Токен для загрузки в релиз и запросов к GitHub API
+    required: false
+    default: ${{ github.token }}
+  xpsetup-version:
+    description: Релиз XPSetup, из которого взять xpsbuild.exe (по умолчанию — соответствующий версии action)
+    required: false
+    default: ''
+  xpsbuild:
+    description: Путь к готовому xpsbuild.exe (без загрузки)
+    required: false
+    default: ''
+
+outputs:
+  setup:
+    description: setup.exe дистрибутива-директории
+    value: ${{ steps.build.outputs.setup }}
+  dir:
+    description: Директория дистрибутива-директории
+    value: ${{ steps.build.outputs.dir }}
+  zip:
+    description: ZIP-архив дистрибутива-директории
+    value: ${{ steps.zip.outputs.zip }}
+  single:
+    description: Однофайловый установщик
+    value: ${{ steps.build.outputs.single }}
+  version:
+    description: Версия продукта в дистрибутиве
+    value: ${{ steps.build.outputs.version }}
+
+runs:
+  using: composite
+  steps:
+    - name: Проверка системы
+      if: runner.os != 'Windows'
+      shell: bash
+      run: |
+        echo "::error title=XPSetup::Сборка установщика работает только на Windows (runs-on: windows-latest)"
+        exit 1
+
+    - name: Получение xpsbuild.exe
+      id: tool
+      shell: pwsh
+      env:
+        INPUT_XPSBUILD: ${{ inputs.xpsbuild }}
+        INPUT_XPSETUP_VERSION: ${{ inputs.xpsetup-version }}
+        ACTION_REPO: ${{ github.action_repository || 'roosslan/cabxp64_installer' }}
+        ACTION_REF: ${{ github.action_ref }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        if ($env:INPUT_XPSBUILD) {
+            $exe = (Resolve-Path $env:INPUT_XPSBUILD).Path
+        } else {
+            $dir = Join-Path $env:RUNNER_TEMP 'xpsetup'
+            New-Item -ItemType Directory -Force $dir | Out-Null
+            $exe = Join-Path $dir 'xpsbuild.exe'
+            $repo = $env:ACTION_REPO
+            $ref = $env:ACTION_REF
+            # Порядок поиска релиза: явно указанный; тег, по которому подключён
+            # action; для основного тега (v1) — последний релиз v1.x; последний релиз.
+            $tags = @()
+            if ($env:INPUT_XPSETUP_VERSION) {
+                $tags += $env:INPUT_XPSETUP_VERSION
+            } else {
+                if ($ref -match '^v\d+$') {
+                    $t = gh api "repos/$repo/releases" --jq "[.[] | select(.draft | not) | select(.tag_name | startswith(`"$ref.`"))][0].tag_name" 2>$null
+                    if ($t) { $tags += $t }
+                } elseif ($ref) {
+                    $tags += $ref
+                }
+                $tags += 'latest'
+            }
+            foreach ($t in $tags) {
+                $url = if ($t -eq 'latest') { "https://github.com/$repo/releases/latest/download/xpsbuild.exe" }
+                       else { "https://github.com/$repo/releases/download/$t/xpsbuild.exe" }
+                try {
+                    Invoke-WebRequest $url -OutFile $exe -UseBasicParsing
+                    Write-Host "xpsbuild.exe: $url"
+                    break
+                } catch {
+                    Write-Host "Не найден: $url"
+                    Remove-Item $exe -ErrorAction SilentlyContinue
+                }
+            }
+            if (-not (Test-Path $exe)) {
+                if ($env:INPUT_XPSETUP_VERSION) {
+                    throw "В релизе $($env:INPUT_XPSETUP_VERSION) репозитория $repo нет xpsbuild.exe"
+                }
+                # Релизов ещё нет: сборка из исходников той же версии action.
+                Write-Host "Сборка xpsbuild.exe из исходников $repo@$ref"
+                $src = Join-Path $dir 'src'
+                git clone --quiet "https://github.com/$repo.git" $src
+                if ($ref) { git -C $src checkout --quiet $ref }
+                git -C $src submodule update --init --quiet
+                cmake -S $src -B "$src\build" -G "Visual Studio 17 2022" -A x64 | Out-Null
+                cmake --build "$src\build" --config Release --target xpsbuild --parallel
+                if ($LASTEXITCODE) { throw 'Сборка xpsbuild.exe не выполнена' }
+                $exe = "$src\build\Release\xpsbuild.exe"
+            }
+        }
+        "exe=$exe" >> $env:GITHUB_OUTPUT
+
+    - name: Сборка установщика
+      id: build
+      shell: pwsh
+      env:
+        XPSBUILD: ${{ steps.tool.outputs.exe }}
+        INPUT_PROJECT: ${{ inputs.project }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_MODE: ${{ inputs.mode }}
+        INPUT_OUT: ${{ inputs.out }}
+        INPUT_DEFINES: ${{ inputs.defines }}
+      run: |
+        $a = @('--build', $env:INPUT_PROJECT, '--out', $env:INPUT_OUT)
+        if ($env:INPUT_VERSION) { $a += @('--version', $env:INPUT_VERSION) }
+        if ($env:INPUT_MODE) { $a += @('--mode', $env:INPUT_MODE) }
+        foreach ($line in ($env:INPUT_DEFINES -split "`r?`n")) {
+            $d = $line.Trim()
+            if ($d -and -not $d.StartsWith('#')) { $a += @('--define', $d) }
+        }
+        & $env:XPSBUILD @a
+        exit $LASTEXITCODE
+
+    - name: Архив дистрибутива-директории
+      id: zip
+      if: steps.build.outputs.dir != ''
+      shell: pwsh
+      env:
+        DIST_DIR: ${{ steps.build.outputs.dir }}
+        DIST_NAME: ${{ steps.build.outputs.name }}
+        INPUT_OUT: ${{ inputs.out }}
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $files = Get-ChildItem $env:DIST_DIR -File |
+            Where-Object { $_.Name -in 'setup.exe', 'setup.sif', 'license.txt' -or $_.Extension -eq '.cab' }
+        $zip = Join-Path (Resolve-Path $env:INPUT_OUT).Path "$($env:DIST_NAME).zip"
+        Compress-Archive -Path $files.FullName -DestinationPath $zip -Force
+        Write-Host "Архив: $zip"
+        "zip=$zip" >> $env:GITHUB_OUTPUT
+
+    - name: Загрузка в релиз
+      if: inputs.release != ''
+      shell: pwsh
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        RELEASE: ${{ inputs.release }}
+        SINGLE: ${{ steps.build.outputs.single }}
+        ZIP: ${{ steps.zip.outputs.zip }}
+      run: |
+        $assets = @($env:SINGLE, $env:ZIP) | Where-Object { $_ }
+        gh release upload $env:RELEASE @assets --clobber --repo $env:GITHUB_REPOSITORY
+        if ($LASTEXITCODE) { throw "Не удалось приложить установщик к релизу $($env:RELEASE)" }
