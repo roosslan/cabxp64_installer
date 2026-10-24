@@ -1,4 +1,4 @@
-#include "build.h"
+﻿#include "build.h"
 
 #include <cstdio>
 
@@ -100,7 +100,11 @@ bool buildFolder(const SetupProject &p, const std::string &projectDir, const std
 
     if (!p.license.empty())
     {
-        std::string src = fsu::isAbsolutePath(p.license) ? p.license : fsu::joinPath(projectDir, p.license);
+        std::string src;
+        if (!expandBuildPath(p.license, src, err))
+            return false;
+        if (!fsu::isAbsolutePath(src))
+            src = fsu::joinPath(projectDir, src);
         std::string text;
         if (!fsu::readFile(src, text, 4u << 20))
         {
@@ -140,9 +144,54 @@ std::string singleFileName(const SetupProject &p)
     return name + "_setup.exe";
 }
 
+bool expandBuildPath(const std::string &path, std::string &out, std::string &err)
+{
+    out = expandVars(path, std::string(), false);
+    size_t a = out.find('%');
+    size_t b = a == std::string::npos ? a : out.find('%', a + 1);
+    if (b != std::string::npos && b > a + 1)
+    {
+        err = "не задана переменная окружения " + out.substr(a + 1, b - a - 1) + " (путь " + path + ")";
+        return false;
+    }
+    return true;
+}
+
+bool normalizeVersion(const std::string &in, std::string &out, std::string &err)
+{
+    std::string v = in;
+    if (!v.empty() && (v[0] == 'v' || v[0] == 'V'))
+        v.erase(0, 1);
+    int parts = 0;
+    bool digit = false;
+    for (char c : v)
+    {
+        if (c >= '0' && c <= '9')
+            digit = true;
+        else if (c == '.' && digit)
+        {
+            ++parts;
+            digit = false;
+        }
+        else
+        {
+            digit = false;
+            parts = 99;
+            break;
+        }
+    }
+    if (!digit || parts > 3)
+    {
+        err = "Недопустимая версия \"" + in + "\": нужно от одного до четырёх чисел через точку, например 1.2.3";
+        return false;
+    }
+    out = v;
+    return true;
+}
+
 std::string outputDirectory(const SetupProject &p, const std::string &projectPath)
 {
-    std::string out = p.outputDir.empty() ? "dist" : p.outputDir;
+    std::string out = p.outputDir.empty() ? "dist" : expandVars(p.outputDir, std::string(), false);
     if (!fsu::isAbsolutePath(out))
         out = fsu::joinPath(fsu::dirName(fsu::fullPath(projectPath)), out);
     return fsu::fullPath(out);
@@ -151,9 +200,13 @@ std::string outputDirectory(const SetupProject &p, const std::string &projectPat
 bool collectComponent(const Component &c, const std::string &projectDir, ComponentFiles &out,
                       std::string &err)
 {
-    std::string src = c.source.empty() ? projectDir
-                    : fsu::isAbsolutePath(c.source) ? c.source
-                                                    : fsu::joinPath(projectDir, c.source);
+    std::string src;
+    if (!expandBuildPath(c.source, src, err))
+    {
+        err = "Компонент " + c.id + ": " + err;
+        return false;
+    }
+    src = src.empty() ? projectDir : fsu::isAbsolutePath(src) ? src : fsu::joinPath(projectDir, src);
     src = fsu::fullPath(src);
     if (fsu::fileExists(src))
     {
@@ -215,6 +268,9 @@ static bool buildImpl(const SetupProject &p, const std::string &projectPath, con
     }
 
     std::string projectDir = fsu::dirName(fsu::fullPath(projectPath));
+    std::string expanded;
+    if (!expandBuildPath(p.outputDir, expanded, err))
+        return false;
     std::string out = outputDirectory(p, projectPath);
     // Перед сборкой из директории результата удаляются прежние *.cab,
     // setup.exe, setup.sif и license.txt — она должна быть отдельной.

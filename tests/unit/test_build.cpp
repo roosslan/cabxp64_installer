@@ -1,5 +1,7 @@
-#include <algorithm>
+﻿#include <algorithm>
 #include <stdexcept>
+
+#include <windows.h>
 
 #include "../../src/builder/build.h"
 #include "../../src/common/cabfile.h"
@@ -191,4 +193,52 @@ TEST(build_single_file_name)
     CHECK_EQ(singleFileName(p), std::string("Имя_ с_запрещёнными_символами_setup.exe"));
     p.singleFile = "x.exe";
     CHECK_EQ(singleFileName(p), std::string("x.exe"));
+}
+
+TEST(build_normalize_version)
+{
+    std::string v, err;
+    REQUIRE_OK(normalizeVersion("v1.2.3", v, err), err);
+    CHECK_EQ(v, std::string("1.2.3"));
+    REQUIRE_OK(normalizeVersion("9.5.123.26", v, err), err);
+    CHECK_EQ(v, std::string("9.5.123.26"));
+    REQUIRE_OK(normalizeVersion("V7", v, err), err);
+    CHECK_EQ(v, std::string("7"));
+    for (const char *bad : {"", "v", "1.2.3.4.5", "1..2", "1.2.", ".1", "1.2-beta", "v1.x", "версия"})
+        CHECK(!normalizeVersion(bad, v, err));
+}
+
+TEST(build_expand_path_variables)
+{
+    SetEnvironmentVariableW(L"XPS_UNIT_PAYLOAD", L"C:\\Сборка");
+    std::string out, err;
+    REQUIRE_OK(expandBuildPath("%XPS_UNIT_PAYLOAD%\\bin", out, err), err);
+    CHECK_EQ(out, std::string("C:\\Сборка\\bin"));
+    REQUIRE_OK(expandBuildPath("files", out, err), err);
+    CHECK_EQ(out, std::string("files"));
+    CHECK(!expandBuildPath("%XPS_UNIT_NOT_SET%\\bin", out, err));
+    CHECK(err.find("XPS_UNIT_NOT_SET") != std::string::npos);
+    SetEnvironmentVariableW(L"XPS_UNIT_PAYLOAD", nullptr);
+}
+
+TEST(build_source_from_environment)
+{
+    test::TempDir t;
+    SetupProject p = makeProject(t);
+    SetEnvironmentVariableW(L"XPS_UNIT_SRC", fsu::widen(t.file("proj\\files")).c_str());
+    SetEnvironmentVariableW(L"XPS_UNIT_OUT", fsu::widen(t.file("out")).c_str());
+    p.components[0].source = "%XPS_UNIT_SRC%";
+    p.components[1].source = "%XPS_UNIT_SRC%\\Files";
+    p.outputDir = "%XPS_UNIT_OUT%";
+    std::string err;
+    BuildResult r;
+    REQUIRE_OK(buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, r, err), err);
+    CHECK_EQ(r.files, (uint64_t) 3);
+    CHECK(fsu::fileExists(t.file("out\\setup.exe")));
+
+    p.components[0].source = "%XPS_UNIT_MISSING%";
+    CHECK(!buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, r, err));
+    CHECK(err.find("XPS_UNIT_MISSING") != std::string::npos);
+    SetEnvironmentVariableW(L"XPS_UNIT_SRC", nullptr);
+    SetEnvironmentVariableW(L"XPS_UNIT_OUT", nullptr);
 }

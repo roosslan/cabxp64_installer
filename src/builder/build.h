@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <string>
@@ -37,6 +37,15 @@ bool buildDistribution(const SetupProject &p, const std::string &projectPath, co
                        CabProgress *progress, BuildResult &result, std::string &err);
 
 std::string singleFileName(const SetupProject &p);
+
+// Подстановка переменных окружения (%APP_BUILD% и т. п.) в путь проекта при
+// сборке. Ошибка — если переменная не задана.
+bool expandBuildPath(const std::string &path, std::string &out, std::string &err);
+
+// Версия продукта из параметра сборки: допускается тег вида v1.2.3; версия —
+// от одного до четырёх чисел через точку.
+bool normalizeVersion(const std::string &in, std::string &out, std::string &err);
+
 std::string outputDirectory(const SetupProject &p, const std::string &projectPath);
 
 // Программа установки, встроенная в сборщик ресурсом.

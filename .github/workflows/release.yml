@@ -1,0 +1,50 @@
+name: Релиз
+
+# Тег вида v1.2 или v1.2.3: сборка, проверка и публикация релиза с xpsbuild.exe.
+# Основной тег (v1) переносится на новый релиз — по нему подключается action.
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+*']
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Получение исходников
+        uses: actions/checkout@v4
+
+      - name: Проверка версии
+        run: |
+          ver=$(sed -n 's/^#define XPSETUP_VERSION "\(.*\)"/\1/p' src/common/version.h)
+          tag="${GITHUB_REF_NAME#v}"
+          if [ "$tag" != "$ver" ] && [ "${tag#"$ver".}" = "$tag" ]; then
+            echo "::error title=Релиз::Тег $GITHUB_REF_NAME не соответствует версии $ver в src/common/version.h"
+            exit 1
+          fi
+
+      - name: Программы
+        uses: actions/download-artifact@v4
+        with:
+          name: xpsetup
+          path: artifact
+
+      - name: Публикация
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp artifact/build/Release/xpsbuild.exe artifact/build/Release/setup.exe .
+          sha256sum xpsbuild.exe setup.exe > SHA256SUMS.txt
+          gh release create "$GITHUB_REF_NAME" xpsbuild.exe setup.exe SHA256SUMS.txt \
+            --title "XPSetup $GITHUB_REF_NAME" --generate-notes
+
+      - name: Перенос основного тега
+        run: |
+          major="${GITHUB_REF_NAME%%.*}"
+          git tag -f "$major"
+          git push -f origin "refs/tags/$major"

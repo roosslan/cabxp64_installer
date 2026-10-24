@@ -3,3 +3,4 @@ build-*/
 example/dist/
 dist-ci/
 ci-logs/
+action-dist/

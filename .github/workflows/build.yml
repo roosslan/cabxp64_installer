@@ -5,6 +5,7 @@ on:
     branches: [trunk]
   pull_request:
   workflow_dispatch:
+  workflow_call:
 
 jobs:
   build:
@@ -28,6 +29,40 @@ jobs:
         shell: powershell
         run: powershell -ExecutionPolicy Bypass -File tests\ci.ps1
 
+      - name: Проверка action
+        id: action
+        uses: ./
+        with:
+          project: tests/action/test.xsp
+          version: v2.5.7
+          out: action-dist
+          xpsbuild: build/Release/xpsbuild.exe
+          defines: |
+            # источник файлов проекта
+            XPS_PAYLOAD=${{ github.workspace }}\example\files
+
+      - name: Результаты action
+        shell: pwsh
+        env:
+          SETUP: ${{ steps.action.outputs.setup }}
+          SINGLE: ${{ steps.action.outputs.single }}
+          ZIP: ${{ steps.action.outputs.zip }}
+          VERSION: ${{ steps.action.outputs.version }}
+        run: |
+          foreach ($p in $env:SETUP, $env:SINGLE, $env:ZIP) {
+              if (-not $p -or -not (Test-Path $p)) { throw "Нет результата: '$p'" }
+          }
+          if ($env:VERSION -ne '2.5.7') { throw "Версия $($env:VERSION) вместо 2.5.7" }
+          $names = (Get-ChildItem (Split-Path $env:SETUP) -Name)
+          if ($names -contains 'demo.pdb') { throw 'В дистрибутив попал исключённый файл' }
+          $unz = Join-Path $env:RUNNER_TEMP 'action-zip'
+          Expand-Archive $env:ZIP -DestinationPath $unz -Force
+          $entries = Get-ChildItem $unz -Name
+          foreach ($n in 'setup.exe', 'setup.sif', 'license.txt', 'program.cab') {
+              if ($entries -notcontains $n) { throw "В архиве нет $n" }
+          }
+          Write-Host "action: $env:SINGLE, $env:ZIP"
+
       - name: Программы и демонстрационный дистрибутив
         if: success()
         uses: actions/upload-artifact@v4
@@ -39,6 +74,7 @@ jobs:
             build/Release/tuitest.exe
             build/Release/unittests.exe
             dist-ci/
+            action-dist/
 
       - name: Журналы
         if: always()
