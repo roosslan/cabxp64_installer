@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <string>
@@ -57,7 +57,7 @@ Key readKey();
 bool waitKey(Key &k, unsigned timeoutMs);
 void flushKeys();
 
-// Запрет закрытия окна и Ctrl+C на время копирования файлов.
+// Запрет закрытия окна и выделения мышью на время копирования файлов.
 void lockClose(bool lock);
 
 } // namespace scr

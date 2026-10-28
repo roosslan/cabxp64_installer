@@ -1,4 +1,4 @@
-#include "screen.h"
+﻿#include "screen.h"
 
 #include <vector>
 
@@ -119,9 +119,9 @@ bool init(const std::string &title)
     GetConsoleMode(hIn, &g_savedInMode);
     g_savedCp = GetConsoleOutputCP();
 
-    // Без быстрого выделения мышью (оно приостанавливает вывод) и без
-    // обработки Ctrl+C системой.
-    SetConsoleMode(hIn, ENABLE_EXTENDED_FLAGS);
+    // Выделение мышью разрешено, пока программа ждёт клавишу; на время
+    // копирования оно выключается (см. lockClose). Ctrl+C обрабатывает программа.
+    SetConsoleMode(hIn, ENABLE_EXTENDED_FLAGS | ENABLE_QUICK_EDIT_MODE);
     SetConsoleOutputCP(866);
     SetConsoleCtrlHandler(ctrlHandler, TRUE);
 
@@ -383,6 +383,10 @@ void flushKeys()
 
 void lockClose(bool lock)
 {
+    // Выделение текста мышью приостанавливает вывод в консоль, а значит и
+    // копирование файлов: на время работы оно выключается.
+    if (hIn != INVALID_HANDLE_VALUE)
+        SetConsoleMode(hIn, ENABLE_EXTENDED_FLAGS | (lock ? 0 : ENABLE_QUICK_EDIT_MODE));
     HWND wnd = GetConsoleWindow();
     if (!wnd)
         return;

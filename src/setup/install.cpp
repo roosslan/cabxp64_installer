@@ -1,4 +1,4 @@
-#include "install.h"
+﻿#include "install.h"
 
 #include <algorithm>
 #include <ctime>
@@ -12,6 +12,7 @@
 
 #include "../common/cabfile.h"
 #include "../common/fsutil.h"
+#include "../common/icons.h"
 #include "../common/log.h"
 #include "../common/sif.h"
 
@@ -527,6 +528,14 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
         return false;
     }
     xlog::write("Программа удаления: " + uninst);
+    // Проводник показывает первую группу иконок: без группы установки у
+    // uninst.exe видна иконка удаления. Ошибка здесь установку не прерывает.
+    if (!iconGroup(uninst, kUninstallIconGroup).empty())
+    {
+        std::string ierr;
+        if (!setIconGroup(uninst, kSetupIconGroup, std::string(), ierr))
+            xlog::error(ierr);
+    }
 
     advance("Журнал установки");
     std::string logPath = fsu::joinPath(job.installDir, kLogName);

@@ -1,4 +1,4 @@
-#include <windows.h>
+﻿#include <windows.h>
 #include <shellapi.h>
 #include <objbase.h>
 
@@ -584,9 +584,11 @@ void setConsoleTitleAndIcon(const std::string &title)
     if (!wnd)
         return;
     HINSTANCE self = GetModuleHandleW(nullptr);
-    HICON iconBig = (HICON) LoadImageW(self, MAKEINTRESOURCEW(1), IMAGE_ICON,
+    // Ресурс 1; у программы удаления его нет — тогда ресурс 2.
+    int id = FindResourceW(self, MAKEINTRESOURCEW(1), MAKEINTRESOURCEW(14) /* RT_GROUP_ICON */) ? 1 : 2;
+    HICON iconBig = (HICON) LoadImageW(self, MAKEINTRESOURCEW(id), IMAGE_ICON,
                                    GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0);
-    HICON iconSmall = (HICON) LoadImageW(self, MAKEINTRESOURCEW(1), IMAGE_ICON,
+    HICON iconSmall = (HICON) LoadImageW(self, MAKEINTRESOURCEW(id), IMAGE_ICON,
                                      GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0);
     if (iconBig)
         SendMessageW(wnd, WM_SETICON, ICON_BIG, (LPARAM) iconBig);

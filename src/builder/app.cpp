@@ -1,4 +1,4 @@
-#define Uses_TKeys
+﻿#define Uses_TKeys
 #define Uses_TEvent
 #define Uses_TRect
 #define Uses_TView
@@ -52,6 +52,8 @@ std::string summary(const SetupProject &p, const std::string &path)
     row("Изменение директории", p.allowChangeDir ? "разрешено" : "запрещено");
     row("Установка", p.perMachine ? "для всех пользователей" : "для текущего пользователя");
     row("Лицензия", p.license.empty() ? "нет" : p.license);
+    row("Иконка установщика", p.icon.empty() ? "по умолчанию" : p.icon);
+    row("Иконка удаления", p.uninstallIcon.empty() ? "по умолчанию" : p.uninstallIcon);
 
     t += "\n Директории\n";
     if (p.directories.empty())
@@ -307,6 +309,8 @@ bool TBuilderApp::save(bool askName)
         for (Component &c : p.components)
             rebase(c.source);
         rebase(p.license);
+        rebase(p.icon);
+        rebase(p.uninstallIcon);
         rebase(p.outputDir);
     }
     std::string err;

@@ -13,6 +13,7 @@ set(COMMON_SOURCES
     src/common/cabfile.cpp
     src/common/format.cpp
     src/common/fsutil.cpp
+    src/common/icons.cpp
     src/common/log.cpp
     src/common/project.cpp
     src/common/sif.cpp
@@ -124,6 +125,7 @@ add_executable(unittests
     tests/unit/main.cpp
     tests/unit/test_build.cpp
     tests/unit/test_cab.cpp
+    tests/unit/test_icons.cpp
     tests/unit/test_install.cpp
     tests/unit/test_log.cpp
     tests/unit/test_project.cpp
