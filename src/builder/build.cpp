@@ -6,6 +6,7 @@
 
 #include "../common/format.h"
 #include "../common/fsutil.h"
+#include "../common/icons.h"
 #include "../common/log.h"
 #include "../common/sif.h"
 #include "builderres.h"
@@ -237,9 +238,49 @@ bool collectComponent(const Component &c, const std::string &projectDir, Compone
 static bool buildImpl(const SetupProject &p, const std::string &projectPath, const std::string &stub,
                       CabProgress *progress, BuildResult &result, std::string &err);
 
-bool buildDistribution(const SetupProject &p, const std::string &projectPath, const std::string &stub,
+// Иконки проекта в копии программы установки.
+static bool applyIcons(const SetupProject &p, const std::string &projectPath, std::string &stub,
+                       std::string &err)
+{
+    if (p.icon.empty() && p.uninstallIcon.empty())
+        return true;
+    std::string projectDir = fsu::dirName(fsu::fullPath(projectPath));
+    std::string temp = fsu::makeTempDir();
+    if (temp.empty())
+    {
+        err = "Не удалось создать временную директорию";
+        return false;
+    }
+    std::string exe = fsu::joinPath(temp, "setup.exe");
+    bool ok = writeFile(exe, stub, err);
+    const std::pair<const std::string *, int> icons[] = {{&p.icon, kSetupIconGroup},
+                                                         {&p.uninstallIcon, kUninstallIconGroup}};
+    for (const auto &ic : icons)
+    {
+        if (!ok || ic.first->empty())
+            continue;
+        std::string path;
+        ok = expandBuildPath(*ic.first, path, err);
+        if (ok && !fsu::isAbsolutePath(path))
+            path = fsu::joinPath(projectDir, path);
+        ok = ok && setIconGroup(exe, ic.second, path, err);
+        if (ok)
+            xlog::write("  иконка " + std::to_string(ic.second) + ": " + path);
+    }
+    ok = ok && fsu::readFile(exe, stub, 256u << 20);
+    fsu::removeTree(temp);
+    return ok;
+}
+
+bool buildDistribution(const SetupProject &p, const std::string &projectPath, const std::string &stubIn,
                        CabProgress *progress, BuildResult &result, std::string &err)
 {
+    std::string stub = stubIn;
+    if (!applyIcons(p, projectPath, stub, err))
+    {
+        xlog::error(err);
+        return false;
+    }
     xlog::write("Сборка " + fsu::fullPath(projectPath) + ": " + p.name + " " + p.version + " -> " +
                 outputDirectory(p, projectPath));
     bool ok = buildImpl(p, projectPath, stub, progress, result, err);

@@ -1,4 +1,4 @@
-#include "project.h"
+﻿#include "project.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -132,6 +132,8 @@ bool loadProject(const std::string &path, SetupProject &p, std::string &err)
     p.allowChangeDir = sif.getInt("Product", "AllowChangeDir", 1) != 0;
     p.perMachine = fsu::upper(sif.get("Product", "Scope", "user")) == "MACHINE";
     p.license = sif.get("Product", "License");
+    p.icon = sif.get("Product", "Icon");
+    p.uninstallIcon = sif.get("Product", "UninstallIcon");
 
     if (const Sif::Section *s = sif.section("Directories"))
         for (const Sif::Line &l : s->lines)
@@ -217,6 +219,11 @@ bool saveProject(const std::string &path, const SetupProject &p, bool forSetup, 
     sif.set("Product", "AllowChangeDir", p.allowChangeDir ? "1" : "0");
     sif.set("Product", "Scope", p.perMachine ? "machine" : "user");
     sif.set("Product", "License", sifQuote(forSetup && !p.license.empty() ? "license.txt" : p.license));
+    if (!forSetup)
+    {
+        sif.set("Product", "Icon", sifQuote(p.icon));
+        sif.set("Product", "UninstallIcon", sifQuote(p.uninstallIcon));
+    }
 
     sif.addSection("Directories");
     for (const auto &d : p.directories)

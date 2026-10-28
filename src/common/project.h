@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <cstdint>
 #include <map>
@@ -62,6 +62,9 @@ struct SetupProject
     bool allowChangeDir = true;
     bool perMachine = false;    // false: текущий пользователь (HKCU)
     std::string license;        // файл лицензии (в проекте — относительно проекта)
+    // Только для сборщика: иконки setup.exe и uninst.exe (.ico); пусто — по умолчанию.
+    std::string icon;
+    std::string uninstallIcon;
 
     std::map<int, std::string> directories;
     std::vector<Component> components;

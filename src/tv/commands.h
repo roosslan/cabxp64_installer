@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 // Команды приложения. Значения меньше 256, чтобы их можно было запрещать.
 enum : unsigned short
@@ -43,4 +43,6 @@ enum : unsigned short
     cmBrowseLicense,
     cmBrowseOutput,
     cmBrowseTarget,
+    cmBrowseIcon,
+    cmBrowseUninstallIcon,
 };

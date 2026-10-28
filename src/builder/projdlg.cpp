@@ -1,4 +1,4 @@
-#define Uses_TKeys
+﻿#define Uses_TKeys
 #define Uses_TEvent
 #define Uses_TRect
 #define Uses_TView
@@ -26,6 +26,7 @@
 
 #include "../common/format.h"
 #include "../common/fsutil.h"
+#include "../common/icons.h"
 #include "../tv/commands.h"
 #include "../tv/dialogs.h"
 #include "build.h"
@@ -282,33 +283,37 @@ class TProductDialog : public TDialog
 public:
     TProductDialog(SetupProject &p, const std::string &projectDir) :
         TWindowInit(&TDialog::initFrame),
-        TDialog(TRect(0, 0, 76, 22), "Продукт"),
+        TDialog(TRect(0, 0, 76, 23), "Продукт"),
         p(p), projectDir(projectDir)
     {
         options |= ofCentered;
-        name = addInput(2, "~Н~азвание:", p.name, 56);
-        version = addInput(4, "~В~ерсия:", p.version, 24);
-        publisher = addInput(6, "~И~здатель:", p.publisher, 56);
-        code = addInput(8, "~К~од продукта:", p.productCode, 44);
-        insert(new TButton(TRect(58, 8, 72, 10), "Но~в~ый", cmNewGuid, bfNormal));
-        installDir = addInput(10, "~Д~иректория установки:", p.installDir, 73);
-        license = addInput(12, "~Л~ицензия (файл):", p.license, 56);
-        insert(new TButton(TRect(58, 12, 72, 14), "~О~бзор...", cmBrowseLicense, bfNormal));
+        name = addInput(3, 73, 1, "~Н~азвание:", p.name);
+        version = addInput(3, 22, 3, "~В~ерсия:", p.version);
+        publisher = addInput(25, 73, 3, "~И~здатель:", p.publisher);
+        code = addInput(3, 46, 5, "~К~од продукта:", p.productCode);
+        insert(new TButton(TRect(58, 5, 72, 7), "Но~в~ый", cmNewGuid, bfNormal));
+        installDir = addInput(3, 73, 7, "~Д~иректория установки:", p.installDir);
+        license = addInput(3, 56, 9, "~Л~ицензия (файл):", p.license);
+        insert(new TButton(TRect(58, 9, 72, 11), "~О~бзор...", cmBrowseLicense, bfNormal));
+        icon = addInput(3, 56, 11, "Иконка ~у~становщика (.ico):", p.icon);
+        insert(new TButton(TRect(58, 11, 72, 13), "Обзор...", cmBrowseIcon, bfNormal));
+        uninstallIcon = addInput(3, 56, 13, "Иконка у~д~аления (.ico):", p.uninstallIcon);
+        insert(new TButton(TRect(58, 13, 72, 15), "Обзор...", cmBrowseUninstallIcon, bfNormal));
 
-        flags = new TCheckBoxes(TRect(3, 15, 40, 16),
+        flags = new TCheckBoxes(TRect(3, 16, 40, 17),
             new TSItem("Разрешить менять директорию", nullptr));
         insert(flags);
         setClusterValue(flags, p.allowChangeDir ? 1 : 0);
-        scope = new TRadioButtons(TRect(3, 17, 36, 19),
+        scope = new TRadioButtons(TRect(3, 18, 36, 20),
             new TSItem("Для текущего пользователя",
             new TSItem("Для всех пользователей", nullptr)));
         insert(scope);
-        insert(new TLabel(TRect(2, 16, 30, 17), "~У~становка:", scope));
-        insert(new TStaticText(TRect(37, 18, 72, 19), "— нужны права администратора"));
+        insert(new TLabel(TRect(2, 17, 30, 18), "~У~становка:", scope));
+        insert(new TStaticText(TRect(37, 19, 72, 20), "— нужны права администратора"));
         setClusterValue(scope, p.perMachine ? 1 : 0);
 
-        insert(new TButton(TRect(24, 19, 36, 21), "O~K~", cmOK, bfDefault));
-        insert(new TButton(TRect(38, 19, 50, 21), "Отмена", cmCancel, bfNormal));
+        insert(new TButton(TRect(24, 20, 36, 22), "O~K~", cmOK, bfDefault));
+        insert(new TButton(TRect(38, 20, 50, 22), "Отмена", cmCancel, bfNormal));
         selectNext(False);
     }
 
@@ -324,6 +329,13 @@ public:
             std::string path;
             if (chooseFile("Файл лицензии", "*.txt", false, path))
                 setInputText(license, relativePath(path, projectDir));
+        }
+        else if (ev.message.command == cmBrowseIcon || ev.message.command == cmBrowseUninstallIcon)
+        {
+            std::string path;
+            if (chooseFile("Файл иконки", "*.ico", false, path))
+                setInputText(ev.message.command == cmBrowseIcon ? icon : uninstallIcon,
+                             relativePath(path, projectDir));
         }
         else
             return;
@@ -350,12 +362,28 @@ public:
                 showError("Необходимо указать директорию установки.");
                 return False;
             }
+            // Иконки без переменных окружения проверяются сразу.
+            for (TInputLine *il : {icon, uninstallIcon})
+            {
+                std::string f = il->data, err;
+                if (f.empty() || f.find('%') != std::string::npos)
+                    continue;
+                if (!projectDir.empty() && !fsu::isAbsolutePath(f))
+                    f = fsu::joinPath(projectDir, f);
+                if (!checkIconFile(f, err))
+                {
+                    showError(err);
+                    return False;
+                }
+            }
             p.name = n;
             p.version = version->data;
             p.publisher = publisher->data;
             p.productCode = fsu::upper(c);
             p.installDir = d;
             p.license = license->data;
+            p.icon = icon->data;
+            p.uninstallIcon = uninstallIcon->data;
             p.allowChangeDir = (clusterValue(flags) & 1) != 0;
             p.perMachine = clusterValue(scope) == 1;
         }
@@ -363,18 +391,18 @@ public:
     }
 
 private:
-    TInputLine *addInput(int y, const char *label, const std::string &value, int x2)
+    TInputLine *addInput(int x1, int x2, int y, const char *label, const std::string &value)
     {
-        TInputLine *il = new TInputLine(TRect(3, y + 1, x2, y + 2), 1024);
+        TInputLine *il = new TInputLine(TRect(x1, y + 1, x2, y + 2), 1024);
         insert(il);
-        insert(new TLabel(TRect(2, y, 40, y + 1), label, il));
+        insert(new TLabel(TRect(x1 - 1, y, x2, y + 1), label, il));
         setInputText(il, value);
         return il;
     }
 
     SetupProject &p;
     std::string projectDir;
-    TInputLine *name, *version, *publisher, *code, *installDir, *license;
+    TInputLine *name, *version, *publisher, *code, *installDir, *license, *icon, *uninstallIcon;
     TCheckBoxes *flags;
     TRadioButtons *scope;
 };

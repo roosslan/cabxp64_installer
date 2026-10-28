@@ -1,4 +1,4 @@
-// Программа установки в стиле текстового режима Windows XP.
+﻿// Программа установки в стиле текстового режима Windows XP.
 //
 //   setup.exe                  установка из дистрибутива (данные внутри exe
 //                              либо setup.sif и CAB-архивы рядом)
@@ -398,6 +398,15 @@ int main()
         return 0;
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     bool removing = hasArg(args, kUninstallFlag);
+    if (!removing)
+    {
+        // uninst.exe, запущенный двойным щелчком: рядом журнал установки, а
+        // описания дистрибутива и дописанных данных нет.
+        std::string self = fsu::exePath(), dir = fsu::dirName(self), err;
+        CabInfo info;
+        removing = fsu::fileExists(fsu::joinPath(dir, kLogName)) &&
+                   !fsu::fileExists(fsu::joinPath(dir, kSifName)) && !cabRead(self, info, err);
+    }
     std::string logPath = argAfter(args, kLogFlag);
     if (logPath.empty())
         logPath = expandVars(kDefaultLog, std::string(), false);
