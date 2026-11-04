@@ -364,8 +364,7 @@ int installMode(const std::vector<std::string> &args)
         if (!installConfig(job, &screen, err))
         {
             scr::lockClose(false);
-            ui::error(p.title(), "Файлы " + p.name + " скопированы, но настройка не завершена.\n\n" + err +
-                                     "\n\nДля исправления необходимо запустить программу установки повторно.");
+            ui::error(p.title(), "Установка " + p.name + " не завершена. См. сведения об ошибке и откате ниже.\n\n" + err);
             cleanup();
             return 1;
         }

@@ -126,7 +126,7 @@ TEST(build_folder_distribution)
     REQUIRE(r.outputs.size() == 1);
     CHECK_EQ(r.outputs[0], t.file("proj\\dist\\setup.exe"));
     CHECK_EQ(r.files, (uint64_t) 3);
-    CHECK(!fsu::fileExists(t.file("proj\\dist\\old.cab")));
+    CHECK_EQ(test::readFile(t.file("proj\\dist\\old.cab")), std::string("x"));
     CHECK(fsu::fileExists(t.file("proj\\dist\\keep.txt")));
     CHECK_EQ(test::readFile(t.file("proj\\dist\\setup.exe")), fakeStub());
     CHECK_EQ(test::readFile(t.file("proj\\dist\\license.txt")), std::string("Лицензия"));
@@ -241,4 +241,44 @@ TEST(build_source_from_environment)
     CHECK(err.find("XPS_UNIT_MISSING") != std::string::npos);
     SetEnvironmentVariableW(L"XPS_UNIT_SRC", nullptr);
     SetEnvironmentVariableW(L"XPS_UNIT_OUT", nullptr);
+}
+
+
+TEST(build_failure_preserves_previous_distribution)
+{
+    test::TempDir t;
+    auto p = makeProject(t);
+    BuildResult result;
+    std::string err;
+    REQUIRE_OK(buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, result, err), err);
+    std::string original = test::readFile(t.file("proj\\dist\\main.cab"));
+    p.license = "missing.txt";
+    CHECK(!buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, result, err));
+    CHECK_EQ(test::readFile(t.file("proj\\dist\\main.cab")), original);
+    CHECK(fsu::fileExists(t.file("proj\\dist\\setup.exe")));
+}
+
+TEST(build_cleans_only_owned_archives)
+{
+    test::TempDir t;
+    auto p = makeProject(t);
+    BuildResult result;
+    std::string err;
+    REQUIRE_OK(buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, result, err), err);
+    test::writeFile(t.file("proj\\dist\\foreign.cab"), "keep me");
+    p.components.pop_back();
+    REQUIRE_OK(buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, result, err), err);
+    CHECK(!fsu::fileExists(t.file("proj\\dist\\addins.cab")));
+    CHECK_EQ(test::readFile(t.file("proj\\dist\\foreign.cab")), std::string("keep me"));
+}
+
+TEST(build_rejects_source_output_overlap)
+{
+    test::TempDir t;
+    auto p = makeProject(t);
+    p.outputDir = "files";
+    BuildResult result;
+    std::string err;
+    CHECK(!buildDistribution(p, t.file("proj\\p.xsp"), fakeStub(), nullptr, result, err));
+    CHECK_EQ(test::readFile(t.file("proj\\files\\app.exe")), std::string("exe"));
 }

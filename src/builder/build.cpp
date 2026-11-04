@@ -1,6 +1,7 @@
 ﻿#include "build.h"
 
 #include <cstdio>
+#include <algorithm>
 
 #include <windows.h>
 
@@ -56,20 +57,8 @@ void walk(const std::string &root, const std::string &rel, const Component &c, C
     }
 }
 
-// Удаление результатов прошлой сборки (только своих файлов).
-void cleanFolderLayout(const std::string &dir)
-{
-    std::vector<fsu::DirItem> items;
-    if (!fsu::listDirectory(dir, items))
-        return;
-    for (const fsu::DirItem &it : items)
-        if (!it.isDir && (fsu::wildMatch("*.cab", it.name) || fsu::upper(it.name) == "SETUP.EXE" ||
-                          fsu::upper(it.name) == "SETUP.SIF" || fsu::upper(it.name) == "LICENSE.TXT"))
-            fsu::removeFile(fsu::joinPath(dir, it.name));
-}
-
 // Директория дистрибутива: setup.sif, лицензия и CAB-архивы.
-bool buildFolder(const SetupProject &p, const std::string &projectDir, const std::string &dir,
+bool stageFolder(const SetupProject &p, const std::string &projectDir, const std::string &dir,
                  const std::string *stub, CabProgress *progress, BuildResult &result,
                  std::vector<std::string> &layout, std::string &err)
 {
@@ -78,7 +67,6 @@ bool buildFolder(const SetupProject &p, const std::string &projectDir, const std
         err = "Не удалось создать директорию " + dir + "\n" + fsu::lastErrorText();
         return false;
     }
-    cleanFolderLayout(dir);
 
     for (const Component &c : p.components)
     {
@@ -129,6 +117,82 @@ bool buildFolder(const SetupProject &p, const std::string &projectDir, const std
         if (!writeFile(exe, *stub, err))
             return false;
     }
+    return true;
+}
+
+// Сначала полностью собираем результат; затем публикуем только свои файлы.
+bool buildFolder(const SetupProject &p, const std::string &projectDir, const std::string &dir,
+                 const std::string *stub, CabProgress *progress, BuildResult &result,
+                 std::vector<std::string> &layout, std::string &err)
+{
+    struct Temp {
+        std::string path = fsu::makeTempDir();
+        bool retain = false;
+        ~Temp() { if (!retain && !path.empty()) fsu::removeTree(path); }
+    } stage, backup;
+    if (stage.path.empty() || backup.path.empty()) { err = "Не удалось создать временную директорию"; return false; }
+    // Выходной каталог не должен пересекаться с источниками компонентов.
+    const std::string output = fsu::upper(fsu::withSlash(fsu::fullPath(dir)));
+    for (const auto &c : p.components)
+    {
+        std::string source;
+        if (!expandBuildPath(c.source, source, err)) return false;
+        if (!fsu::isAbsolutePath(source)) source = fsu::joinPath(projectDir, source);
+        std::string root = fsu::upper(fsu::withSlash(fsu::fullPath(source)));
+        if (output.compare(0, root.size(), root) == 0 || root.compare(0, output.size(), output) == 0)
+        { err = "Директория результата пересекается с источником компонента " + c.id; return false; }
+    }
+    std::vector<std::string> staged;
+    if (!stageFolder(p, projectDir, stage.path, stub, progress, result, staged, err)) return false;
+    std::vector<std::string> names;
+    for (const auto &path : staged) names.push_back(fsu::baseName(path));
+    if (stub) names.push_back(kSetupExe);
+    std::vector<std::string> affected = names;
+    SetupProject previous;
+    std::string ignored;
+    if (loadProject(fsu::joinPath(dir, kSifName), previous, ignored) && previous.productCode == p.productCode)
+    {
+        for (const auto &c : previous.components)
+            if (c.cabinet == fsu::baseName(c.cabinet)) affected.push_back(c.cabinet);
+        if (!previous.license.empty()) affected.push_back(kLicenseName);
+    }
+    std::sort(affected.begin(), affected.end());
+    affected.erase(std::unique(affected.begin(), affected.end()), affected.end());
+    if (!fsu::makeDirs(dir)) { err = "Не удалось создать директорию " + dir; return false; }
+    for (const auto &name : affected)
+    {
+        std::string dst = fsu::joinPath(dir, name);
+        if (fsu::fileExists(dst) && !CopyFileW(fsu::widen(dst).c_str(), fsu::widen(fsu::joinPath(backup.path, name)).c_str(), TRUE))
+        { err = "Не удалось сохранить прежний результат " + dst; return false; }
+    }
+    bool ok = true;
+    for (const auto &name : affected)
+    {
+        std::string dst = fsu::joinPath(dir, name), src = fsu::joinPath(stage.path, name);
+        if (fsu::fileExists(src))
+        {
+            fsu::clearReadOnly(dst);
+            if (!CopyFileW(fsu::widen(src).c_str(), fsu::widen(dst).c_str(), FALSE)) { ok = false; break; }
+        }
+        else if (fsu::fileExists(dst) && !fsu::removeFile(dst)) { ok = false; break; }
+    }
+    if (!ok)
+    {
+        err = "Не удалось опубликовать дистрибутив в " + dir;
+        for (const auto &name : affected)
+        {
+            std::string dst = fsu::joinPath(dir, name), src = fsu::joinPath(backup.path, name);
+            if (fsu::fileExists(src))
+            {
+                fsu::clearReadOnly(dst);
+                if (!CopyFileW(fsu::widen(src).c_str(), fsu::widen(dst).c_str(), FALSE)) backup.retain = true;
+            }
+            else if (fsu::fileExists(dst) && !fsu::removeFile(dst)) backup.retain = true;
+        }
+        if (backup.retain) err += "\nРезервные копии: " + backup.path;
+        return false;
+    }
+    for (const auto &path : staged) layout.push_back(fsu::joinPath(dir, fsu::baseName(path)));
     return true;
 }
 
@@ -313,8 +377,7 @@ static bool buildImpl(const SetupProject &p, const std::string &projectPath, con
     if (!expandBuildPath(p.outputDir, expanded, err))
         return false;
     std::string out = outputDirectory(p, projectPath);
-    // Перед сборкой из директории результата удаляются прежние *.cab,
-    // setup.exe, setup.sif и license.txt — она должна быть отдельной.
+    // Дистрибутив публикуется в отдельную директорию результата.
     if (fsu::upper(fsu::withSlash(out)) == fsu::upper(fsu::withSlash(projectDir)))
     {
         err = "Директория результата совпадает с директорией проекта. Необходимо указать "

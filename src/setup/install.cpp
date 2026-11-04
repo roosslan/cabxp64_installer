@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <ctime>
 #include <set>
+#include <functional>
 
 #include <windows.h>
 #include <objbase.h>
@@ -15,6 +16,16 @@
 #include "../common/icons.h"
 #include "../common/log.h"
 #include "../common/sif.h"
+
+// Резервные копии живут между двумя этапами установки.
+struct InstallTransaction
+{
+    std::string temp = fsu::makeTempDir();
+    std::set<std::string> saved;
+    std::vector<std::function<bool()>> undo;
+    bool retain = false;
+    ~InstallTransaction() { if (!retain && !temp.empty()) fsu::removeTree(temp); }
+};
 
 namespace {
 
@@ -70,6 +81,68 @@ void missingDirs(const std::string &path, std::vector<std::string> &out)
     }
 }
 
+bool backupFile(InstallJob &job, const std::string &path, std::string &err)
+{
+    auto &t = *job.transaction;
+    std::string id = fsu::upper(fsu::fullPath(path));
+    if (t.saved.count(id)) return true;
+    bool exists = fsu::fileExists(path);
+    std::string copy = fsu::joinPath(t.temp, std::to_string(t.undo.size()));
+    if (exists && !CopyFileW(fsu::widen(path).c_str(), fsu::widen(copy).c_str(), TRUE))
+    {
+        err = "Не удалось сохранить резервную копию " + path + "\n" + fsu::lastErrorText();
+        return false;
+    }
+    // Каталог не является файлом установки: откат не должен его удалять.
+    if (!fsu::dirExists(path))
+        t.undo.push_back([path, copy, exists]() {
+            if (!exists) return !fsu::fileExists(path) || fsu::removeFile(path);
+            fsu::makeDirs(fsu::dirName(path));
+            fsu::clearReadOnly(path);
+            return CopyFileW(fsu::widen(copy).c_str(), fsu::widen(path).c_str(), FALSE) != FALSE;
+        });
+    t.saved.insert(id);
+    return true;
+}
+
+bool backupValue(InstallJob &job, HKEY root, const std::string &path,
+                 const std::string &name, std::string &err)
+{
+    auto &t = *job.transaction;
+    std::string id = std::string(root == HKEY_LOCAL_MACHINE ? "HKLM:" : "HKCU:") +
+                     fsu::upper(path) + "|" + fsu::upper(name);
+    if (t.saved.count(id)) return true;
+    HKEY key = nullptr;
+    LONG rc = RegOpenKeyExW(root, fsu::widen(path).c_str(), 0, KEY_QUERY_VALUE, &key);
+    if (rc != ERROR_SUCCESS && rc != ERROR_FILE_NOT_FOUND && rc != ERROR_PATH_NOT_FOUND)
+    { err = "Не удалось прочитать раздел реестра " + path; return false; }
+    DWORD type = 0, size = 0;
+    LONG valueRc = key ? RegQueryValueExW(key, fsu::widen(name).c_str(), nullptr, &type, nullptr, &size)
+                       : ERROR_FILE_NOT_FOUND;
+    std::vector<BYTE> data(size);
+    if (valueRc == ERROR_SUCCESS)
+        valueRc = RegQueryValueExW(key, fsu::widen(name).c_str(), nullptr, &type, data.data(), &size);
+    if (key) RegCloseKey(key);
+    if (valueRc != ERROR_SUCCESS && valueRc != ERROR_FILE_NOT_FOUND)
+    { err = "Не удалось прочитать значение реестра " + path; return false; }
+    data.resize(size);
+    bool exists = valueRc == ERROR_SUCCESS;
+    t.undo.push_back([root, path, name, type, data, exists]() {
+        HKEY k = nullptr;
+        LONG r = exists ? RegCreateKeyExW(root, fsu::widen(path).c_str(), 0, nullptr, 0,
+                           KEY_SET_VALUE, nullptr, &k, nullptr)
+                        : RegOpenKeyExW(root, fsu::widen(path).c_str(), 0, KEY_SET_VALUE, &k);
+        if (!exists && (r == ERROR_FILE_NOT_FOUND || r == ERROR_PATH_NOT_FOUND)) return true;
+        if (r != ERROR_SUCCESS) return false;
+        r = exists ? RegSetValueExW(k, fsu::widen(name).c_str(), 0, type, data.data(), (DWORD)data.size())
+                   : RegDeleteValueW(k, fsu::widen(name).c_str());
+        RegCloseKey(k);
+        return r == ERROR_SUCCESS || (!exists && r == ERROR_FILE_NOT_FOUND);
+    });
+    t.saved.insert(id);
+    return true;
+}
+
 // Распаковка одного архива с пересчётом прогресса на весь дистрибутив.
 class CopyProgress : public CabProgress
 {
@@ -107,13 +180,41 @@ private:
 };
 
 // Удаление установленного при неудачной установке.
-void rollback(InstallJob &job)
+void rollback(InstallJob &job, std::string *error = nullptr)
 {
     xlog::write("Откат: удаление скопированных файлов (" + std::to_string(job.log.files.size()) + ")");
-    for (const std::string &f : job.log.files)
+    if (job.transaction)
     {
-        fsu::clearReadOnly(f);
-        fsu::removeFile(f);
+        bool ok = true;
+        for (auto i = job.transaction->undo.rbegin(); i != job.transaction->undo.rend(); ++i)
+            if (!(*i)()) ok = false;
+        if (!ok)
+        {
+            job.transaction->retain = true;
+            std::string message = "Откат неполон. Резервные копии: " + job.transaction->temp;
+            xlog::error(message);
+            if (error) *error += "\n" + message;
+        }
+    }
+    std::vector<std::string> keys = job.log.keys;
+    std::sort(keys.begin(), keys.end(), [](const std::string &a, const std::string &b) { return a.size() > b.size(); });
+    for (const auto &k : keys)
+    {
+        size_t slash = k.find('\\');
+        if (slash != std::string::npos)
+        {
+            HKEY h = nullptr;
+            HKEY root = rootKey(k.substr(0, slash));
+            std::wstring path = fsu::widen(k.substr(slash + 1));
+            if (RegOpenKeyExW(root, path.c_str(), 0, KEY_READ, &h) == ERROR_SUCCESS)
+            {
+                DWORD sub = 0, values = 0;
+                LONG rc = RegQueryInfoKeyW(h, nullptr, nullptr, nullptr, &sub, nullptr, nullptr,
+                                          &values, nullptr, nullptr, nullptr, nullptr);
+                RegCloseKey(h);
+                if (rc == ERROR_SUCCESS && !sub && !values) RegDeleteKeyW(root, path.c_str());
+            }
+        }
     }
     std::vector<std::string> dirs = job.log.dirs;
     std::sort(dirs.begin(), dirs.end(), [](const std::string &a, const std::string &b) {
@@ -123,6 +224,7 @@ void rollback(InstallJob &job)
         RemoveDirectoryW(fsu::widen(d).c_str());
     job.log.files.clear();
     job.log.dirs.clear();
+    job.transaction.reset();
 }
 
 bool createShortcut(const std::string &lnk, const std::string &target, const std::string &args,
@@ -363,23 +465,39 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
         progress->onPercent(0);
     killProcesses(p.killProcesses, progress);
 
-    // Прежняя версия удаляется по её журналу; запись в «Программах и
-    // компонентах» перезапишет новая установка.
+    // Проверяем все сжатые данные до изменения установленной версии.
+    for (const auto &c : p.components)
+        if (!cabTest(fsu::joinPath(job.distDir, c.cabinet), nullptr, err)) return false;
+    job.transaction = std::make_shared<InstallTransaction>();
+    if (job.transaction->temp.empty()) { err = "Не удалось создать резервную директорию"; return false; }
+    InstallLog old;
     if (job.existing.found)
     {
-        InstallLog old;
-        std::string lerr;
-        xlog::write("Удаление прежней версии " + job.existing.version + " из " + job.existing.dir);
-        if (!old.load(fsu::joinPath(job.existing.dir, kLogName), lerr))
-            xlog::error("Журнал прежней установки не прочитан: " + lerr);
-        else
-        {
-            killProcesses(old.killProcesses, progress);
-            uninstall(old, progress, true, lerr);
-            // Созданное прежней установкой удалит деинсталляция новой версии.
-            job.log.dirs = old.dirs;
-            job.log.keys = old.keys;
-        }
+        if (!old.load(fsu::joinPath(job.existing.dir, kLogName), err)) return false;
+        for (const auto &f : old.files)
+            if (!backupFile(job, f, err)) return false;
+        for (const auto &f : old.shortcuts)
+            if (!backupFile(job, f, err)) return false;
+        for (const auto &v : old.values)
+            if (!backupValue(job, rootKey(v.root), v.key, v.name, err)) return false;
+    }
+    for (const auto &c : p.components)
+    {
+        CabInfo info;
+        if (!cabRead(fsu::joinPath(job.distDir, c.cabinet), info, err)) return false;
+        for (const auto &f : info.entries)
+            if (!backupFile(job, cabTargetPath(directoryPath(p, c.directory, job.installDir), f.name, true), err))
+                return false;
+    }
+    if (job.existing.found)
+    {
+        killProcesses(old.killProcesses, progress);
+        // Сначала оставляем старые каталоги: они понадобятся и для отката.
+        InstallLog removal = old;
+        removal.dirs.clear();
+        if (!uninstall(removal, progress, true, err)) { rollback(job, &err); return false; }
+        job.log.dirs = old.dirs;
+        job.log.keys = old.keys;
     }
 
     missingDirs(job.installDir, job.log.dirs);
@@ -388,7 +506,7 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
         err = "Программа установки не может создать директорию\n" + job.installDir + "\n" +
               fsu::lastErrorText();
         xlog::error(err);
-        rollback(job);
+        rollback(job, &err);
         return false;
     }
 
@@ -404,7 +522,7 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
         {
             err = "Программа установки не может найти файл " + c.cabinet + "\n" + cerr;
             xlog::error(err);
-            rollback(job);
+            rollback(job, &err);
             return false;
         }
         xlog::write("Компонент " + c.id + ": " + c.cabinet + " -> " + dest + " (файлов: " +
@@ -427,7 +545,7 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
                 continue;
             }
             err = cerr;
-            rollback(job);
+            rollback(job, &err);
             return false;
         }
         base += info.totalSize;
@@ -440,6 +558,13 @@ bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err)
 bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
 {
     const SetupProject &p = job.project;
+    if (!job.transaction) { err = "Этап копирования не выполнен"; return false; }
+    struct Guard {
+        InstallJob &job; std::string &err; bool committed = false;
+        ~Guard() { if (!committed) rollback(job, &err); }
+    } guard{job, err};
+    for (const char *name : {kUninstallerName, kLogName})
+        if (!backupFile(job, fsu::joinPath(job.installDir, name), err)) return false;
     int steps = (int) (p.registry.size() + p.shortcuts.size()) + 3;
     int step = 0;
     auto advance = [&](const std::string &status) {
@@ -456,6 +581,7 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
         HKEY root = rootKey(r.root);
         HKEY key = nullptr;
         std::string path = expandVars(r.key, job.installDir, p.perMachine);
+        if (!backupValue(job, root, path, r.name, err)) return false;
         // RegCreateKeyEx создаёт и недостающие родительские разделы: в журнал
         // попадают все, которых не было (при удалении — только пустые).
         for (size_t end = 0; end != std::string::npos;)
@@ -506,6 +632,7 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
                         : s.place == ShortcutPlace::Startup  ? "%STARTUP%"
                                                              : "%DESKTOP%";
         std::string lnk = fsu::joinPath(expandVars(var, job.installDir, p.perMachine), s.name + ".lnk");
+        if (!backupFile(job, lnk, err)) return false;
         missingDirs(fsu::dirName(lnk), job.log.dirs);
         fsu::makeDirs(fsu::dirName(lnk));
         if (!createShortcut(lnk, expandVars(s.target, job.installDir, p.perMachine),
@@ -548,6 +675,15 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
     advance("Регистрация программы");
     HKEY root = p.perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
     HKEY key = nullptr;
+    const std::string arp = uninstallKeyPath(p.productCode);
+    HKEY probe = nullptr;
+    LONG probeRc = RegOpenKeyExW(root, fsu::widen(arp).c_str(), 0, KEY_READ, &probe);
+    if (probe) RegCloseKey(probe);
+    if (probeRc == ERROR_FILE_NOT_FOUND)
+        job.log.keys.push_back(std::string(p.perMachine ? "HKLM\\" : "HKCU\\") + arp);
+    for (const char *name : {"DisplayName", "DisplayVersion", "Publisher", "InstallLocation", "DisplayIcon",
+                             "UninstallString", "InstallDate", "EstimatedSize", "NoModify", "NoRepair"})
+        if (!backupValue(job, root, arp, name, err)) return false;
     if (RegCreateKeyExW(root, fsu::widen(uninstallKeyPath(p.productCode)).c_str(), 0, nullptr, 0,
                         KEY_SET_VALUE, nullptr, &key, nullptr) != ERROR_SUCCESS)
     {
@@ -564,17 +700,21 @@ bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err)
     char date[16];
     time_t t = time(nullptr);
     strftime(date, sizeof(date), "%Y%m%d", localtime(&t));
-    regSetString(key, "DisplayName", p.name);
-    regSetString(key, "DisplayVersion", p.version);
-    regSetString(key, "Publisher", p.publisher);
-    regSetString(key, "InstallLocation", job.installDir);
-    regSetString(key, "DisplayIcon", icon);
-    regSetString(key, "UninstallString", "\"" + uninst + "\" /uninstall");
-    regSetString(key, "InstallDate", date);
-    regSetDword(key, "EstimatedSize", (DWORD) dirSizeKb(job.log.files));
-    regSetDword(key, "NoModify", 1);
-    regSetDword(key, "NoRepair", 1);
+    bool registered = true;
+    registered = regSetString(key, "DisplayName", p.name) && registered;
+    registered = regSetString(key, "DisplayVersion", p.version) && registered;
+    registered = regSetString(key, "Publisher", p.publisher) && registered;
+    registered = regSetString(key, "InstallLocation", job.installDir) && registered;
+    registered = regSetString(key, "DisplayIcon", icon) && registered;
+    registered = regSetString(key, "UninstallString", "\"" + uninst + "\" /uninstall") && registered;
+    registered = regSetString(key, "InstallDate", date) && registered;
+    registered = regSetDword(key, "EstimatedSize", (DWORD) dirSizeKb(job.log.files)) && registered;
+    registered = regSetDword(key, "NoModify", 1) && registered;
+    registered = regSetDword(key, "NoRepair", 1) && registered;
     RegCloseKey(key);
+    if (!registered) { err = "Не удалось записать регистрацию программы"; return false; }
+    guard.committed = true;
+    job.transaction.reset();
     xlog::write(std::string("Регистрация: ") + (p.perMachine ? "HKLM\\" : "HKCU\\") +
                 uninstallKeyPath(p.productCode));
 
@@ -635,7 +775,7 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
         {
             xlog::lastError("  не удалён " + f);
             // Занятый файл удаляется при следующей перезагрузке (если хватает прав).
-            if (MoveFileExW(fsu::widen(f).c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT))
+            if (!keepRegistration && MoveFileExW(fsu::widen(f).c_str(), nullptr, MOVEFILE_DELAY_UNTIL_REBOOT))
                 xlog::write("  будет удалён при перезагрузке");
             else
                 failed.push_back(f);
@@ -644,18 +784,20 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
     for (const std::string &s : log.shortcuts)
     {
         advance("Ярлык: " + fsu::baseName(s));
-        fsu::removeFile(s);
+        if (fsu::fileExists(s) && !fsu::removeFile(s)) failed.push_back(s);
     }
     for (const RegistryValue &v : log.values)
     {
         advance("Реестр: " + (v.name.empty() ? fsu::baseName(v.key) : v.name));
         HKEY key = nullptr;
-        if (RegOpenKeyExW(rootKey(v.root), fsu::widen(v.key).c_str(), 0, KEY_SET_VALUE, &key) ==
-            ERROR_SUCCESS)
+        LONG rc = RegOpenKeyExW(rootKey(v.root), fsu::widen(v.key).c_str(), 0, KEY_SET_VALUE, &key);
+        if (rc == ERROR_SUCCESS)
         {
-            RegDeleteValueW(key, fsu::widen(v.name).c_str());
+            rc = RegDeleteValueW(key, fsu::widen(v.name).c_str());
             RegCloseKey(key);
         }
+        if (rc != ERROR_SUCCESS && rc != ERROR_FILE_NOT_FOUND && rc != ERROR_PATH_NOT_FOUND)
+            failed.push_back(v.root + "\\" + v.key + "\\" + v.name);
     }
     // Созданные установкой разделы удаляются, только если они пусты.
     std::vector<std::string> keys = log.keys;
@@ -681,14 +823,44 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
     }
 
     advance("Регистрация программы");
-    if (!keepRegistration)
+    if (!keepRegistration && failed.empty())
     {
-        HKEY root = log.perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
-        RegDeleteKeyW(root, fsu::widen(uninstallKeyPath(log.productCode)).c_str());
-        fsu::removeFile(logPath);
-        fsu::removeFile(uninst);
-        fsu::removeFile(fsu::joinPath(log.installDir, kSetupLogName));
-        xlog::write("Регистрация в системе удалена");
+        // Служебные файлы восстанавливаются, если снять регистрацию не удалось.
+        InstallJob recovery;
+        recovery.transaction = std::make_shared<InstallTransaction>();
+        std::string recoveryError;
+        bool ready = !recovery.transaction->temp.empty() &&
+                     backupFile(recovery, uninst, recoveryError) && backupFile(recovery, logPath, recoveryError);
+        if (!ready)
+            failed.push_back("Не удалось сохранить служебные файлы: " + recoveryError);
+        else
+        {
+            HKEY root = log.perMachine ? HKEY_LOCAL_MACHINE : HKEY_CURRENT_USER;
+            if (fsu::fileExists(uninst) && !fsu::removeFile(uninst)) failed.push_back(uninst);
+            if (!failed.empty()) recovery.transaction->undo.clear();
+            if (failed.empty() && fsu::fileExists(logPath) && !fsu::removeFile(logPath))
+            {
+                failed.push_back(logPath);
+                // Последняя копия относится к журналу, который не был изменён.
+                recovery.transaction->undo.pop_back();
+            }
+            if (failed.empty())
+            {
+                LONG rc = RegDeleteKeyW(root, fsu::widen(uninstallKeyPath(log.productCode)).c_str());
+                if (rc != ERROR_SUCCESS && rc != ERROR_FILE_NOT_FOUND && rc != ERROR_PATH_NOT_FOUND)
+                    failed.push_back(uninstallKeyPath(log.productCode));
+            }
+            if (!failed.empty())
+            {
+                rollback(recovery, &recoveryError);
+                if (!recoveryError.empty()) failed.push_back(recoveryError);
+            }
+            else
+            {
+                fsu::removeFile(fsu::joinPath(log.installDir, kSetupLogName));
+                xlog::write("Регистрация в системе удалена");
+            }
+        }
     }
 
     advance("Удаление директорий");
@@ -707,7 +879,7 @@ bool uninstall(const InstallLog &log, InstallProgress *progress, bool keepRegist
                                : "Удаление завершено, не удалено файлов: " + std::to_string(failed.size()));
     if (!failed.empty())
     {
-        err = "Не удалось удалить файлы:";
+        err = "Не удалось завершить удаление:";
         for (size_t i = 0; i < failed.size() && i < 5; ++i)
             err += "\n" + failed[i];
         if (failed.size() > 5)
