@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <memory>
 #include <vector>
 
 #include "../common/project.h"
@@ -49,6 +50,8 @@ public:
     virtual bool askRetry(const std::string &) { return false; }
 };
 
+struct InstallTransaction;
+
 struct InstallJob
 {
     SetupProject project;
@@ -58,11 +61,12 @@ struct InstallJob
     uint64_t selfStubSize = 0;  // размер программы без дописанных данных
     ExistingInstall existing;
 
+    std::shared_ptr<InstallTransaction> transaction;
     InstallLog log;             // заполняется по ходу установки
 };
 
-// Этап 1: остановка процессов, удаление прежней версии, копирование файлов.
-// При ошибке скопированное удаляется.
+// Этап 1: проверка архивов, резервирование и копирование файлов.
+// При ошибке восстанавливается состояние до установки.
 bool installFiles(InstallJob &job, InstallProgress *progress, std::string &err);
 // Этап 2: реестр, ярлыки, программа удаления, регистрация в системе.
 bool installConfig(InstallJob &job, InstallProgress *progress, std::string &err);

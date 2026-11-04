@@ -288,12 +288,18 @@ std::string validateProject(const SetupProject &p)
         return "Не указан код продукта.";
     if (p.installDir.empty())
         return "Не указана директория установки.";
+    if (!p.singleFile.empty() && (p.singleFile != fsu::baseName(p.singleFile) ||
+        p.singleFile.find(':') != std::string::npos))
+        return "Имя однофайлового дистрибутива должно быть простым именем файла.";
     if (p.components.empty())
         return "Не задано ни одного компонента.";
     for (const Component &c : p.components)
     {
         if (c.cabinet.empty())
             return "У компонента " + c.id + " не указано имя CAB.";
+        if (c.cabinet != fsu::baseName(c.cabinet) || c.cabinet.find(':') != std::string::npos ||
+            fsu::upper(fsu::extension(c.cabinet)) != "CAB")
+            return "Имя CAB должно быть простым именем файла с расширением .cab.";
         if (c.directory != 0 && !p.directories.count(c.directory))
             return "Компонент " + c.id + " ссылается на несуществующую директорию " +
                    std::to_string(c.directory) + ".";

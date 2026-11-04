@@ -317,3 +317,121 @@ TEST(install_payload_size)
     uint64_t expect = app.size() + std::string("[a]\r\nb=1\r\n").size() + std::string("<addin/>").size();
     CHECK_EQ(payloadSize(f.p, f.t.file("proj\\dist")), expect);
 }
+
+
+TEST(install_upgrade_failure_restores_previous_version)
+{
+    Fixture f("1.0", true);
+    f.build();
+    std::string err;
+    auto first = f.job();
+    REQUIRE_OK(installFiles(first, nullptr, err), err);
+    REQUIRE_OK(installConfig(first, nullptr, err), err);
+    const std::string originalLog = test::readFile(fsu::joinPath(f.installDir, kLogName));
+    f.p.version = "2.0";
+    test::writeFile(f.t.file("proj\\files\\app.exe"), "version two");
+    f.build();
+    auto second = f.job();
+    REQUIRE_OK(installFiles(second, nullptr, err), err);
+    // Ошибка после записи реестра, до сохранения нового журнала.
+    second.selfPath = f.t.file("missing.exe");
+    CHECK(!installConfig(second, nullptr, err));
+    CHECK_EQ(test::readFile(fsu::joinPath(f.installDir, "app.exe")), std::string("приложение 1.0"));
+    CHECK_EQ(test::readFile(fsu::joinPath(f.installDir, kLogName)), originalLog);
+    CHECK_EQ(findExisting(f.p).version, std::string("1.0"));
+    CHECK_EQ(regString(f.p.registry[0].key, "Путь"), f.installDir);
+    REQUIRE_OK(uninstall(first.log, nullptr, false, err), err);
+}
+
+TEST(install_bad_upgrade_keeps_old_files)
+{
+    Fixture f("1.0", true);
+    f.build();
+    std::string err;
+    auto first = f.job();
+    REQUIRE_OK(installFiles(first, nullptr, err), err);
+    REQUIRE_OK(installConfig(first, nullptr, err), err);
+    fsu::removeFile(f.t.file("proj\\dist\\addins.cab"));
+    auto second = f.job();
+    CHECK(!installFiles(second, nullptr, err));
+    CHECK_EQ(test::readFile(fsu::joinPath(f.installDir, "app.exe")), std::string("приложение 1.0"));
+    CHECK(fsu::fileExists(fsu::joinPath(f.installDir, "old.dll")));
+    REQUIRE_OK(uninstall(first.log, nullptr, false, err), err);
+}
+
+TEST(install_failed_copy_restores_foreign_file)
+{
+    Fixture f("1.0");
+    f.build();
+    test::writeFile(fsu::joinPath(f.installDir, "app.exe"), "original contents");
+    test::writeFile(f.t.file("inst\\Модули"), "blocker");
+    auto job = f.job();
+    std::string err;
+    CHECK(!installFiles(job, nullptr, err));
+    CHECK_EQ(test::readFile(fsu::joinPath(f.installDir, "app.exe")), std::string("original contents"));
+    CHECK(!fsu::fileExists(fsu::joinPath(f.installDir, "data\\config.ini")));
+}
+
+TEST(install_config_failure_restores_registry)
+{
+    Fixture f("1.0");
+    f.build();
+    HKEY key = nullptr;
+    REQUIRE(RegCreateKeyExW(HKEY_CURRENT_USER, fsu::widen(f.p.registry[0].key).c_str(),
+            0, nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr) == ERROR_SUCCESS);
+    const wchar_t original[] = L"before";
+    RegSetValueExW(key, L"Путь", 0, REG_SZ, (const BYTE *)original, sizeof(original));
+    RegCloseKey(key);
+    auto job = f.job();
+    std::string err;
+    REQUIRE_OK(installFiles(job, nullptr, err), err);
+    job.selfPath = f.t.file("missing.exe");
+    CHECK(!installConfig(job, nullptr, err));
+    CHECK_EQ(regString(f.p.registry[0].key, "Путь"), std::string("before"));
+    CHECK(!fsu::fileExists(fsu::joinPath(f.installDir, "app.exe")));
+    CHECK(!findExisting(f.p).found);
+}
+
+TEST(uninstall_failure_keeps_recovery_metadata)
+{
+    Fixture f("1.0");
+    f.build();
+    std::string err;
+    auto job = f.job();
+    REQUIRE_OK(installFiles(job, nullptr, err), err);
+    REQUIRE_OK(installConfig(job, nullptr, err), err);
+    std::string shortcut = f.t.file("locked.lnk");
+    test::writeFile(shortcut, "shortcut");
+    job.log.shortcuts.push_back(shortcut);
+    REQUIRE_OK(job.log.save(fsu::joinPath(f.installDir, kLogName), err), err);
+    HANDLE h = CreateFileW(fsu::widen(shortcut).c_str(), GENERIC_READ, FILE_SHARE_READ,
+                           nullptr, OPEN_EXISTING, 0, nullptr);
+    REQUIRE(h != INVALID_HANDLE_VALUE);
+    bool removed = uninstall(job.log, nullptr, false, err);
+    CloseHandle(h);
+    CHECK(!removed);
+    CHECK(findExisting(f.p).found);
+    CHECK(fsu::fileExists(fsu::joinPath(f.installDir, kUninstallerName)));
+    REQUIRE_OK(uninstall(job.log, nullptr, false, err), err);
+    CHECK(!findExisting(f.p).found);
+}
+
+
+TEST(uninstall_locked_log_restores_uninstaller)
+{
+    Fixture f("1.0");
+    f.build();
+    std::string err;
+    auto job = f.job();
+    REQUIRE_OK(installFiles(job, nullptr, err), err);
+    REQUIRE_OK(installConfig(job, nullptr, err), err);
+    HANDLE h = CreateFileW(fsu::widen(fsu::joinPath(f.installDir, kLogName)).c_str(),
+                           GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    REQUIRE(h != INVALID_HANDLE_VALUE);
+    bool removed = uninstall(job.log, nullptr, false, err);
+    CloseHandle(h);
+    CHECK(!removed);
+    CHECK(findExisting(f.p).found);
+    CHECK_EQ(test::readFile(fsu::joinPath(f.installDir, kUninstallerName)), f.stub);
+    REQUIRE_OK(uninstall(job.log, nullptr, false, err), err);
+}
